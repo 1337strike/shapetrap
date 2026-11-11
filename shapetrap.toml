@@ -1,0 +1,138 @@
+# shapetrap configuration. Paths are relative to this file.
+
+seed = 42                # cleaning, capping, probes
+seeds = [42, 43, 44]     # one train/test split per seed
+test_size = 0.25
+max_per_class = 20000    # cap per class and source after de-duplication
+
+tokenizer = "web"        # "web" or "paper1"
+max_features = 4000
+detectors = ["lr", "mnb", "svm", "sig", "crs"]
+# lr / mnb / svm: linear models | sig: 27 local regular expressions
+# crs: the real OWASP Core Rule Set through libmodsecurity (optional; skipped
+#      when libmodsecurity or a C compiler is missing)
+nonlinear_detectors = ["rf", "gbm", "mlp"]      # random forest, LightGBM, MLP
+nonlinear_preprocess = ["raw", "canon", "cstrip"]
+preprocess = ["raw", "canon", "cstrip", "vmil"]
+# raw: as sent | canon: canonicalized | cstrip: container removed, values
+# canonicalized and joined | vmil: one decision per value (multiple-instance)
+shape_augment = true     # also train each ML detector with shape augmentation
+interventions = true     # bare / kv / json variants of every test set (first seed)
+intervention_detectors = ["lr", "rf", "gbm", "mlp"]
+headline = "lr-raw"      # configuration shown in the report's matrices
+out_dir = "out"
+
+# --- sources ---------------------------------------------------------------
+
+[datasets.paper1x]       # your 1,012-string corpus + cmdi/traversal lists
+loader = "paper1"
+path = "data/raw/sqlixss-detector"
+extra_payloads = "data/raw/Offensive-Payloads"
+use_predefined_split = false
+
+[datasets.hpd]           # HttpParamsDataset: bare parameter values
+loader = "hpd"
+path = "data/raw/HttpParamsDataset"
+
+[datasets.csic]          # CSIC 2010: query strings and form bodies
+loader = "csic"
+path = "data/raw/Web-Application-Attack-Datasets/OriginalDataSets/csic_2010"
+
+[datasets.ecml]          # ECML/PKDD 2007: anonymized query strings and bodies
+loader = "ecml"
+path = "data/raw/ecml_xml/learning_dataset.xml"
+
+[datasets.gran]          # Granqvist & Holmberg payload collection
+loader = "gran"
+path = "data/raw/Machine-Learning-Web-Application-Firewall-and-Dataset"
+
+[datasets.fwaf]          # FWAF good/bad URL queries
+loader = "fwaf"
+path = "data/raw/Fwaf-Machine-Learning-driven-Web-Application-Firewall"
+
+[datasets.modsec]        # ModSec-Learn (2024): real legitimate queries + SQLi
+loader = "modsec"
+path = "data/raw/modsec-learn-dataset"
+
+[datasets.crs]           # OWASP CRS regression tests (2026): attacks + hard negatives
+loader = "crs"
+path = "data/raw/coreruleset"
+
+# --- held-out sources --------------------------------------------------------
+# role = "test": never trained on. Every detector trained on a benchmark source
+# above is applied to these unchanged. `group` and `period` are labels for the
+# report.
+
+[datasets.patt]          # PayloadsAllTheThings Intruder lists
+loader = "patt"
+path = "data/raw/PayloadsAllTheThings"
+role = "test"
+group = "curated"
+period = "list as of Oct 2026"
+
+[datasets.shell21]       # Cowrie shell commands, IEEE SRDS 2025 dataset
+loader = "shellevo"
+path = "data/raw/shell-attack-evolution-dataset"
+period = "2021_2022"
+role = "test"
+group = "wild-ssh"
+
+[datasets.shell24]
+loader = "shellevo"
+path = "data/raw/shell-attack-evolution-dataset"
+period = "2024"
+role = "test"
+group = "wild-ssh"
+
+[datasets.copot_ssh]     # Copot-2025: Cowrie sessions on AWS
+loader = "copot"
+path = "data/raw/Conpot2025"
+part = "cowrie"
+role = "test"
+group = "wild-ssh"
+period = "Apr-Jul 2025"
+
+[datasets.tpot25]        # T-Pot SSH export
+loader = "tpot_csv"
+path = "data/raw/SSH-Honeypot-Dataset/data"
+role = "test"
+group = "wild-ssh"
+period = "Nov 2025"
+
+[datasets.copot_web]     # Copot-2025: Tanner and h0neytr4p web honeypots
+loader = "copot"
+path = "data/raw/Conpot2025"
+part = "web"
+role = "test"
+group = "wild-web"
+period = "2025"
+
+[datasets.finch]         # Finch reverse-proxy honeypot
+loader = "finch"
+path = "data/raw/honeypot-data/datasets/finch_20250731-20251101/events.jsonl.zst"
+role = "test"
+group = "wild-web"
+period = "Jul-Nov 2025"
+
+[datasets.vps]           # Requests and SSH logins received by a production VPS
+loader = "vps"
+path = "data/raw/vps-attack-dataset"
+role = "test"
+group = "wild-web"
+period = "Jun-Oct 2026"
+
+# Your own Cowrie log (one JSONL file or a folder of them):
+# [datasets.mylog]
+# loader = "cowrie"
+# path = "data/honeypot"
+# role = "test"
+# group = "wild-ssh"
+# period = "..."
+
+# Add your own source:
+# [datasets.mine]
+# loader = "csv"
+# path = "data/raw/mine.csv"
+# text_column = "payload"
+# label_column = "label"
+# label_map = { normal = "benign", SQLi = "sqli" }

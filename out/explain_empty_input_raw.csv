@@ -1,0 +1,9 @@
+source,lr,mnb,svm
+paper1x,cmdi,benign,cmdi
+hpd,benign,benign,benign
+csic,attack,benign,attack
+ecml,benign,benign,benign
+gran,benign,benign,benign
+fwaf,benign,attack,benign
+modsec,benign,benign,benign
+crs,sqli,other,sqli
