@@ -24,7 +24,7 @@ out_dir = "out"
 
 # --- sources ---------------------------------------------------------------
 
-[datasets.paper1x]       # your 1,012-string corpus + cmdi/traversal lists
+[datasets.paper1x]       # sqlixss-detector corpus + cmdi/traversal lists
 loader = "paper1"
 path = "data/raw/sqlixss-detector"
 extra_payloads = "data/raw/Offensive-Payloads"
