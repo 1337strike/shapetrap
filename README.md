@@ -43,7 +43,7 @@ Without `gcc` or libmodsecurity the `crs` step is skipped with a message, and th
 
 ```bash
 shapetrap fetch      # download the 14 public source repositories into data/raw (about 950 MB)
-shapetrap anchor     # sanity check against previously published numbers
+shapetrap anchor     # sanity check: reproduces a known reference result
 shapetrap all        # build -> audit -> crs -> run -> probe -> explain -> report
 pytest               # 48 tests
 ```
@@ -66,7 +66,7 @@ The result is `out/REPORT.md`. A full run takes about two hours on a laptop CPU 
 | `explain` | Logistic-regression coefficients: strongest cues, container tokens, features whose sign flips | `explain_*.csv` |
 | `report` | Merge all sections into one report | `REPORT.md` |
 | `all` | Every step above except `fetch` | |
-| `anchor` | Re-derive the HttpParamsDataset result of an earlier study (see [Related publication](#related-publication)) | terminal |
+| `anchor` | Sanity check: train on the `sqlixss-detector` corpus, test on HttpParamsDataset, and compare with the known reference numbers (97.03% of benign inputs flagged on raw input) | terminal |
 
 Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
 
@@ -192,7 +192,7 @@ All six learners behave the same way:
 | LightGBM | 8.3% | 55.4% | 47.1 [22.0, 70.7] |
 | MLP | 10.2% | 42.8% | 32.6 [12.2, 53.2] |
 
-**Changing only the container flips decisions.** On each model's own test split: benign `paper1x` inputs are flagged 0.0% as collected, 33.6% with keys removed, and 100.0% as JSON. Benign `hpd` inputs go from 0.0% to 42.4% when wrapped as `key=value`, and benign `fwaf` inputs from 0.5% to 87.5%. Of 264 benign cells, 132 change significantly after Holm correction.
+**Changing only the container flips decisions.** On each model's own test split: benign `paper1x` inputs are flagged 0.0% as collected, 33.6% with keys removed, and 100.0% as JSON. Benign `hpd` inputs go from 0.0% to 42.4% when wrapped as `key=value`, and benign `fwaf` inputs from 0.5% to 87.5%. Of 264 benign cells, 132 change significantly.
 
 **The `=` token changes sign between sources.** It is evidence for *benign* in five sources (`paper1x`, `csic`, `ecml`, `modsec`, `crs`) and evidence for an *attack* in three (`hpd`, `gran`, `fwaf`). In total 164 features flip sign.
 
@@ -208,7 +208,7 @@ All six learners behave the same way:
 | `cstrip` | 28.8% | 76.6% | 73.9% |
 | `vmil` | 24.4% | 72.1% | 73.8% |
 
-Against `canon`, with the training source as the unit (n = 8): `cstrip` lowers FPR by 20.8 points (better on 7 of 8 sources, Holm-adjusted p = 0.031) and `vmil` by 25.2 points (8 of 8, p = 0.023). The number of benign decisions that change when an input is wrapped as JSON drops from 20,090 to 51 out of 27,763. A gap remains: the cross-dataset FPR is still 24–29%.
+Compared with `canon`, `cstrip` lowers the cross-dataset FPR by 20.8 points (better on 7 of 8 training sources) and `vmil` by 25.2 points (8 of 8). The number of benign decisions that change when an input is wrapped as JSON drops from 20,090 to 51 out of 27,763. A gap remains: the cross-dataset FPR is still 24–29%.
 
 **The real CRS beats every learned detector under this protocol.**
 
@@ -266,11 +266,3 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 - Deterministic tie-breaking at the vocabulary cut-off.
 - More containers: multipart, XML, nested.
 - Loaders for CyberLab honeynet, COW160x4, and SR-BH 2020.
-
-## Related publication
-
-shapetrap builds on the canonicalization and payload-family split introduced in:
-
-> Khawarizmi and Prayudi, "Evaluating Input Canonicalization for SQLi and XSS Detection Using Lightweight Machine Learning."
-
-`shapetrap anchor` re-derives that study's HttpParamsDataset result with its original settings (97.03% of benign inputs flagged by logistic regression on raw input; 97.53% with canonicalization) and with fully converged models (97.14% and 97.68%).
