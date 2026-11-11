@@ -266,3 +266,9 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 - Deterministic tie-breaking at the vocabulary cut-off.
 - More containers: multipart, XML, nested.
 - Loaders for CyberLab honeynet, COW160x4, and SR-BH 2020.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE). Copyright 2026 1337strike.
+
+The license covers the code in this repository. The datasets that `shapetrap fetch` downloads keep their own licenses.
