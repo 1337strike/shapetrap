@@ -273,6 +273,10 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 - More containers: multipart, XML, nested.
 - Loaders for CyberLab honeynet, COW160x4, and SR-BH 2020.
 
+## Security
+
+To report a security problem, see [SECURITY.md](SECURITY.md).
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE). Copyright 2026 1337strike.
