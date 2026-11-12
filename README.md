@@ -12,8 +12,10 @@ Everything runs on a CPU. No GPU, no containers, no network traffic is generated
 
 - **Cross-dataset transfer matrix.** Train on one source, test on every source, with family-grouped splits, a leakage purge per cell, and several seeds.
 - **Six learners on the same features.** Logistic regression, naive Bayes, linear SVM, random forest, LightGBM, and a one-hidden-layer MLP.
-- **Shape-only interventions.** The same test inputs are re-sent as bare values, as `key=value`, and as JSON. A decision that changes can only be caused by the container.
-- **Integrity audit.** Overlap between sources at string, normalized-string, and value level, to find benchmarks that share one origin.
+- **Shape-only interventions.** The same test inputs are re-sent as bare values, as `key=value`, and as JSON, on every seed. A decision that changes can only be caused by the container.
+- **Shape-only baseline.** A model that sees nothing but the container (its type and the number of `key=value` pairs) is trained on every source, to show how far the shape alone gets.
+- **Equal-FPR comparison.** AUC and detection at a fixed 1% and 5% false-positive rate, so detectors with different thresholds can be compared fairly.
+- **Integrity audit.** Overlap between sources at string, normalized-string, and value level, to find benchmarks that share benign values. Sources that overlap are grouped, and the main results are repeated with one member of each group at a time and with the group as the unit of the tests.
 - **Container canonicalization.** Two preprocessing modes that remove the container before classification (`cstrip`, `vmil`).
 - **Real OWASP CRS baseline.** Every string is scored by the Core Rule Set through libmodsecurity at paranoia levels 1 and 2.
 - **Held-out sources.** Payload lists and SSH/web honeypot logs that are never trained on, with attempted credentials as a non-injection control.
@@ -45,10 +47,10 @@ Without `gcc` or libmodsecurity the `crs` step is skipped with a message, and th
 shapetrap fetch      # download the 14 public source repositories into data/raw (about 950 MB)
 shapetrap anchor     # sanity check: reproduces a known reference result
 shapetrap all        # build -> audit -> crs -> run -> probe -> explain -> report
-pytest               # 48 tests
+pytest               # 52 tests
 ```
 
-The result is `out/REPORT.md`. A full run takes about two hours on a laptop CPU (measured on an Intel Core i7-10610U with 16 GB RAM); the `run` step is most of it.
+The result is `out/REPORT.md`. A full run takes about two and a half to three hours on a laptop CPU (Intel Core i7-10610U, 16 GB RAM); the `run` step is most of it. Set `intervention_seeds = "first"` in `shapetrap.toml` to cut it back to about two hours.
 
 `fetch` checks out every repository at a pinned commit and, for large repositories, only the folders that are used.
 
@@ -74,19 +76,23 @@ Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
 
 1. **Two kinds of sources.** *Benchmark* sources have a benign class and an attack class, so they are used for training and testing. *Held-out* sources (`role = "test"`) are never trained on.
 2. **Splits.** Each benchmark source is split 75/25 by payload *family*, stratified by class, once per seed. A family groups strings that differ only in numbers, quoted literals, whitespace, or case, so near-duplicates never straddle the split.
-3. **Transfer.** A model is trained on the training split of source A and tested on the test split of every source. Before cell A→B is scored, test strings whose normalized form occurs in A's training split are removed.
+3. **Transfer.** A model is trained on the training split of source A and tested on the test split of every source. Before cell A→B is scored, test strings whose normalized form occurs in A's training split are removed. Since the normalized form keeps the container, each cell also reports how many test strings are still shared with training once the container is removed, and the FPR and detection without them (`overlap_cstrip`, `fpr_novl`, `det_novl`).
 4. **Metric.** An input counts as *flagged* when the prediction is anything other than `benign`. This keeps sources with untyped attacks comparable.
-5. **Shape interventions.** Each test set is scored again with only the container changed: `bare` (keys removed), `kv` (wrapped as `key=value`), `json`. Tested with exact McNemar tests and Holm correction.
+5. **Shape interventions.** Each test set is scored again with only the container changed: `bare` (keys removed), `kv` (wrapped as `key=value`), `json`. Tested with exact McNemar tests and Holm correction within each seed, configuration, and class. Pooled over seeds, a cell counts as significant only when it is significant in every seed. A rewritten attack is not checked against a real application, so this measures how sensitive a decision is to the container, not whether the rewritten attack would still work.
 6. **Preprocessing modes.**
    - `raw`: the input as sent.
    - `canon`: percent-decoding (up to three rounds), HTML entities, `\uXXXX` escapes, SQL comment removal, whitespace and case normalization.
    - `cstrip`: keys, separators, and JSON structure are removed; every value is canonicalized and the values are joined. `id=5&q=x`, `{"id":"5","q":"x"}`, and `5 x` become the same text.
    - `vmil`: one decision per value; an input is flagged when any value is flagged. Training is multiple-instance, because in an attack request it is not known which value is malicious.
 
-   A key is dropped only when it is a plain identifier. Anything else in key position is kept as a value, so a payload cannot hide in a parameter name.
+   A key is dropped only when it is a plain identifier. Anything else in key position is kept as a value, so a payload cannot hide in a parameter name. Duplicate keys keep every value, empty values are dropped, and a string whose separators do not parse as `key=value` pairs is treated as one bare value.
+
+   Example, `id=5&q=%27%20OR%201=1`: `raw` keeps it as is; `canon` gives `id=5&q=' or 1=1`; `cstrip` gives `5 ' or 1=1`; `vmil` scores `5` and `' or 1=1` separately.
 7. **Shape augmentation.** Each learned detector is also trained in a `+aug` variant that sees every training string in the other containers with the same label.
 8. **CRS baseline.** Each string is placed in an HTTP request that matches its container (key-value as query string, path as request target, JSON as body, anything else as the value of one parameter) and evaluated by libmodsecurity with the CRS rules. Nothing is sent over a network; the request only exists as arguments to the library.
-9. **Uncertainty.** Wilson intervals per cell, 10,000 bootstrap resamples over training sources for cross-dataset means, and exact Wilcoxon signed-rank tests for remedy comparisons.
+9. **Shape-only baseline.** `shape-lr` is a logistic regression on six numbers per input: one indicator per container type and the number of `key=value` pairs (capped at 8).
+10. **Uncertainty.** Wilson intervals per cell, 10,000 bootstrap resamples over training sources for cross-dataset means, and exact Wilcoxon signed-rank tests for remedy comparisons, both with the training source and with the provenance group as the unit.
+11. **Equal FPR.** For every scoring detector, each cell also reports AUC and the share of attacks flagged when the threshold is set on that cell's benign inputs so that 1% or 5% of them are flagged. The threshold uses the test labels, so these are best-case operating points.
 
 ### Reading honeypot sources
 
@@ -162,7 +168,7 @@ Seeds, the cap per class, the tokenizer, the number of features, and the list of
 | File | Content |
 |---|---|
 | `out/REPORT.md` | All sections in one document |
-| `out/transfer_cells.csv` | One row per seed, training source, test source, and configuration, with counts and Wilson intervals |
+| `out/transfer_cells.csv` | One row per seed, training source, test source, and configuration, with counts, Wilson intervals, AUC, detection at 1% and 5% FPR, and the overlap check after container removal |
 | `out/transfer_summary.csv` | The same cells averaged over seeds, with standard deviations |
 | `out/interventions.csv` | Decisions under each container variant, with McNemar tests |
 | `out/audit_overlap.csv` | Pairwise overlap between sources |
@@ -196,7 +202,7 @@ All six learners behave the same way:
 
 **The `=` token changes sign between sources.** It is evidence for *benign* in five sources (`paper1x`, `csic`, `ecml`, `modsec`, `crs`) and evidence for an *attack* in three (`hpd`, `gran`, `fwaf`). In total 164 features flip sign.
 
-**Three benchmarks share one benign origin.** 90.5% of the benign values of `hpd` occur in CSIC 2010 parameters, and 99.5% of the smaller set between `csic` and `gran`, at 0.0% string-level overlap. `hpd`, `csic`, and `gran` are the same application's traffic in different containers.
+**Three benchmarks share benign values.** 90.5% of the benign values of `hpd` occur in CSIC 2010 parameters, and 99.5% of the smaller set between `csic` and `gran`, at 0.0% string-level overlap. Value overlap alone does not prove a common application, but these three sources are not independent, so the report treats them as one group.
 
 **Removing the container helps.** Logistic regression, cross-dataset mean:
 
@@ -219,7 +225,7 @@ Compared with `canon`, `cstrip` lowers the cross-dataset FPR by 20.8 points (bet
 | Best learned detector, cross-dataset (`svm-vmil`) | 25.7% | 73.4% | 73.9% |
 | `lr-raw`, in-distribution | 8.6% | 97.1% | 94.2% |
 
-**Repackaging alone works as evasion.** With the payload unchanged, detection of `lr-raw` drops significantly in 15 of 56 cross-dataset cells when the payload is wrapped as `key=value` and in 8 of 56 as JSON (largest drop 49.4 points). Shape augmentation makes this worse for JSON (28 of 56 cells). With `cstrip`, no cell drops significantly for logistic regression.
+**Repackaging changes attack decisions.** With the payload unchanged, detection of `lr-raw` drops significantly in 15 of 56 cross-dataset cells when the payload is wrapped as `key=value` and in 8 of 56 as JSON (largest drop 49.4 points). Shape augmentation makes this worse for JSON (28 of 56 cells). With `cstrip`, no cell drops significantly for logistic regression.
 
 **On honeypot data the outcome depends on the training source, not on the input.** Share of distinct inputs flagged by `lr-raw`:
 
@@ -249,7 +255,8 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 
 - All six learners use the same TF-IDF token features. Character-level models and transformers are not covered.
 - The CRS runs outside a web server, on synthetic requests with minimal headers. This approximates a real deployment; it does not equal one.
-- Interventions and the evasion test run on the first seed only, and move the payload between containers without mutating it.
+- Interventions move the payload between containers without mutating it, and rewritten attacks are not run against an application, so a changed decision is not proof of a working evasion.
+- Removing the container also removes context that can matter, such as an unexpected parameter name.
 - Container parsing knows key-value, JSON, and path with query string. Multipart, XML, and nested containers are not handled.
 - Container canonicalization does not help evenly. Two training sources barely improve with `cstrip` (`paper1x` 53.5% → 48.5%, `csic` 100.0% → 94.6%), and `vmil` costs 7.0 points of detection.
 - Remedy tests use n = 8 training sources, so the smallest possible p-value is 0.008. Read them together with the bootstrap intervals.
@@ -262,7 +269,6 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 ## Roadmap
 
 - Character-level and small transformer models.
-- Interventions and evasion on all seeds.
 - Deterministic tie-breaking at the vocabulary cut-off.
 - More containers: multipart, XML, nested.
 - Loaders for CyberLab honeynet, COW160x4, and SR-BH 2020.

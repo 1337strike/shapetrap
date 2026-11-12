@@ -547,3 +547,53 @@ def test_logistic_regression_is_run_to_convergence_except_for_the_anchor():
     assert make_clf("lr", paper_settings=True).tol == 1e-4       # scikit-learn default
     assert make_clf("lr", paper_settings=True).max_iter == 1000
     assert TfidfDetector("lr", "raw", paper_settings=True).clf.tol == 1e-4
+
+
+# --- 0.6.0: threshold-free scores, pooled interventions, provenance groups ---
+
+def test_ranked_auc_and_detection_at_fixed_fpr():
+    import numpy as np
+    from shapetrap.experiment import _ranked
+    benign = np.arange(100, dtype=float)          # 0..99
+    attack = np.array([99.5, 98.5, 50.0, 200.0])
+    score = np.concatenate([attack, benign])
+    is_attack = np.array([True] * 4 + [False] * 100)
+    out = _ranked(score, is_attack)
+    # 1% of 100 benign strings = 1 allowed above the threshold (99), so > 98
+    assert out["det_at_fpr1"] == pytest.approx(3 / 4)
+    assert out["det_at_fpr5"] == pytest.approx(3 / 4)     # threshold 94
+    assert out["auc"] == pytest.approx((100 + 100 + 99 + 50.5) / 400)
+    assert math.isnan(_ranked(None, is_attack)["auc"])
+    assert math.isnan(_ranked(score[4:], is_attack[4:])["auc"])   # no attack strings
+
+
+def test_pool_seeds_requires_significance_in_every_seed():
+    from shapetrap.experiment import pool_seeds
+    base = {"source": "a", "target": "b", "config": "lr-raw", "variant": "json",
+            "class": "benign", "n": 10, "n_changed": 10, "became_flagged": 2, "became_clear": 0}
+    rows = [dict(base, seed=s, flagged_native=0.2, flagged_variant=v, delta=v - 0.2, p_holm=p)
+            for s, v, p in ((42, 0.6, 0.001), (43, 0.4, 0.2), (44, 0.5, 0.01))]
+    (pooled,) = pool_seeds(rows)
+    assert pooled["seeds"] == 3 and pooled["sig_seeds"] == 2
+    assert pooled["p_holm"] == 0.2
+    assert pooled["delta"] == pytest.approx(0.3)
+
+
+def test_provenance_groups_link_shared_sources_and_keep_held_out_apart():
+    from shapetrap.audit import provenance_groups
+    rows = [{"a": "x", "b": "y", "normalized_share": "0.02", "benign_value_share": "0.9"},
+            {"a": "y", "b": "z", "normalized_share": "0.3", "benign_value_share": "nan"},
+            {"a": "x", "b": "w", "normalized_share": "0.01", "benign_value_share": "0.1"},
+            {"a": "w", "b": "h", "normalized_share": "0.8", "benign_value_share": "0.8"}]
+    groups, other = provenance_groups(rows, ["x", "y", "z", "w", "h"], held={"h"})
+    assert sorted(map(sorted, groups)) == [["w"], ["x", "y", "z"]]
+    assert other == ["w / h"]
+
+
+def test_shape_baseline_is_in_the_grid_and_sees_no_content():
+    from shapetrap.models import detector_grid
+    from shapetrap.shapes import shape_features
+    cfg = {"detectors": ["lr"], "preprocess": ["raw"], "shape_baseline": True}
+    assert ("shape", "lr", False) in detector_grid(cfg)
+    assert shape_features("id=1' or 1=1") == shape_features("id=42")
+    assert shape_features("id=1") != shape_features('{"id": 1}')

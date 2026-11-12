@@ -17,8 +17,11 @@ preprocess = ["raw", "canon", "cstrip", "vmil"]
 # raw: as sent | canon: canonicalized | cstrip: container removed, values
 # canonicalized and joined | vmil: one decision per value (multiple-instance)
 shape_augment = true     # also train each ML detector with shape augmentation
-interventions = true     # bare / kv / json variants of every test set (first seed)
+interventions = true     # bare / kv / json variants of every test set
 intervention_detectors = ["lr", "rf", "gbm", "mlp"]
+intervention_seeds = "all"   # "all", "first", or a list of seeds
+shape_baseline = true    # also train a model that only sees the input's shape
+robustness_exclude = ["crs"]   # sources left out in one robustness table
 headline = "lr-raw"      # configuration shown in the report's matrices
 out_dir = "out"
 
