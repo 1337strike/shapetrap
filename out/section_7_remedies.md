@@ -104,6 +104,22 @@ Unit of analysis: the training source (n = 8). Each value is that source's mean 
 | `gbm-cstrip` | container removed | 69.1 | 64.6 | -4.5 [-13.9, +4.5] | - | 0.461 |  |
 | `mlp-cstrip` | container removed | 66.3 | 59.9 | -6.4 [-11.2, +0.6] | - | 0.195 |  |
 
+**Provenance groups as the unit** (each group's mean difference over its member training sources; groups: paper1x; hpd + csic + gran; ecml; fwaf; modsec; crs)
+
+| metric | configuration | difference vs lr-canon, points [95% bootstrap] | better | p | p (Holm, all rows) |
+|---|---|---|---|---|---|
+| FPR, other benchmark sources | `lr-canon+aug` | -10.7 [-18.1, -3.9] | 5/6 | 0.062 | 0.500 |
+| FPR, other benchmark sources | `lr-cstrip` | -18.5 [-30.5, -7.0] | 5/6 | 0.062 | 0.500 |
+| FPR, other benchmark sources | `lr-vmil` | -18.8 [-33.2, -5.1] | 6/6 | 0.031 | 0.281 |
+| attacks flagged, other benchmark sources | `lr-canon+aug` | -0.4 [-9.9, +7.8] | 3/6 | 1.000 | 1.000 |
+| attacks flagged, other benchmark sources | `lr-cstrip` | -0.7 [-11.3, +9.5] | 3/6 | 1.000 | 1.000 |
+| attacks flagged, other benchmark sources | `lr-vmil` | -5.0 [-16.7, +6.8] | 2/6 | 0.562 | 1.000 |
+| balanced accuracy, other benchmark sources | `lr-canon+aug` | +5.2 [+1.6, +9.1] | 5/6 | 0.062 | 0.500 |
+| balanced accuracy, other benchmark sources | `lr-cstrip` | +8.9 [+4.0, +13.0] | 5/6 | 0.062 | 0.500 |
+| balanced accuracy, other benchmark sources | `lr-vmil` | +6.9 [+0.7, +12.7] | 4/6 | 0.156 | 0.625 |
+
+With 6 units the smallest attainable two-sided p is 0.031.
+
 **`lr-cstrip` against `lr-canon`: FPR on the other benchmark sources, per seed**
 
 | seed | canon | cstrip | cells with lower FPR | cells with higher FPR |

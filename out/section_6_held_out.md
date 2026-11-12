@@ -107,25 +107,36 @@ The reference is the real OWASP Core Rule Set run through libmodsecurity. It mar
 | `mlp-cstrip` | 77.1 | 17.0 | 37.0 | 16.8 | 54.7 | - |
 | `crs-pl1` | 94.3 | 0.1 | 35.1 | 0.0 | 85.7 | - |
 | `crs-pl2` | 97.2 | 0.3 | 39.3 | 0.1 | 89.8 | - |
+| `shape-lr` | 50.0 | 50.0 | 56.8 | 50.0 | 51.3 | - |
 
 `wild-ssh`: SSH/Telnet honeypots (shell commands typed after login): shell21, shell24, copot_ssh, tpot25.
 `wild-web`: Web honeypots and exposed servers (request parameters): copot_web, finch, vps.
 `curated`: Curated payload lists (attack strings only): patt.
 
-**Same strings, container changed (`lr-raw`, first seed, distinct, %, mean over training sources)**
+**Is the control class a fair negative?**
+
+| source | control strings | with shell or SQL metacharacters (%) | blocked by CRS level 1 (%) |
+|---|---|---|---|
+| copot_ssh | 20000 | 0.2 | 0.1 |
+| tpot25 | 2081 | 0.0 | 0.1 |
+| vps | 20000 | 0.0 | 0.0 |
+
+Metacharacters: quote, backtick, semicolon, pipe, ampersand, dollar, angle brackets, parentheses, braces, square brackets, backslash.
+
+**Same strings, container changed (`lr-raw`, distinct, %, mean over training sources and seeds)**
 
 | source | class | as observed | as bare | as kv | as json |
 |---|---|---|---|---|---|
-| patt | attack class | 62.4 | 62.4 (1/8) | 59.8 (7/8) | 74.9 (7/8) |
-| shell21 | attack class | 66.1 | 66.1 (0/8) | 66.4 (6/8) | 69.4 (4/8) |
-| shell24 | attack class | 72.1 | 72.1 (0/8) | 71.9 (5/8) | 77.3 (5/8) |
-| copot_ssh | attack class | 62.3 | 62.3 (0/8) | 64.5 (3/8) | 72.8 (2/8) |
-| copot_ssh | control | 37.5 | 37.5 (0/8) | 48.2 (6/8) | 73.4 (6/8) |
-| tpot25 | attack class | 67.8 | 67.8 (0/8) | 65.9 (6/8) | 69.0 (3/8) |
-| tpot25 | control | 37.3 | 37.3 (0/8) | 48.1 (5/8) | 73.6 (5/8) |
-| copot_web | attack class | 62.7 | 60.7 (6/8) | 62.7 (5/8) | 76.1 (6/8) |
-| finch | attack class | 49.3 | 38.4 (5/8) | 51.7 (4/8) | 70.4 (4/8) |
-| vps | attack class | 45.4 | 37.1 (6/8) | 45.4 (3/8) | 72.5 (6/8) |
-| vps | control | 37.5 | 37.5 (0/8) | 48.5 (6/8) | 73.5 (6/8) |
+| patt | attack class | 62.7 | 62.7 (1/8) | 59.6 (7/8) | 75.8 (7/8) |
+| shell21 | attack class | 65.4 | 65.4 (0/8) | 68.7 (5/8) | 72.6 (4/8) |
+| shell24 | attack class | 70.6 | 70.6 (0/8) | 72.7 (5/8) | 75.9 (4/8) |
+| copot_ssh | attack class | 59.5 | 59.5 (0/8) | 62.5 (3/8) | 71.6 (2/8) |
+| copot_ssh | control | 37.5 | 37.5 (0/8) | 46.7 (6/8) | 75.0 (6/8) |
+| tpot25 | attack class | 65.9 | 65.9 (0/8) | 68.5 (5/8) | 72.2 (3/8) |
+| tpot25 | control | 37.4 | 37.4 (0/8) | 46.2 (5/8) | 75.0 (5/8) |
+| copot_web | attack class | 63.6 | 61.3 (6/8) | 63.5 (5/8) | 77.2 (6/8) |
+| finch | attack class | 48.2 | 37.4 (4/8) | 50.4 (4/8) | 69.8 (4/8) |
+| vps | attack class | 46.3 | 37.2 (6/8) | 46.2 (2/8) | 73.4 (6/8) |
+| vps | control | 37.5 | 37.5 (0/8) | 46.8 (6/8) | 75.1 (5/8) |
 
-In brackets: training sources for which the change is significant (Holm-adjusted exact McNemar p < 0.05).
+In brackets: training sources for which the change is significant in every seed (Holm-adjusted exact McNemar p < 0.05).
