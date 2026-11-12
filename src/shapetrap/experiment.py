@@ -20,13 +20,16 @@ from pathlib import Path
 import numpy as np
 
 from .datasets import held_out_sources, split_all
+from scipy.stats import rankdata
+
 from .models import (CONTAINER_FREE, SIGNATURE_PREPS, Features, Signature, ValueSpace,
-                     config_name, make_clf)
-from .shapes import INTERVENTIONS
+                     attack_score, config_name, make_clf, preprocess)
+from .shapes import INTERVENTIONS, shape_features
 from .stats import bootstrap_mean, holm, mcnemar_exact, mean_sd, wilcoxon_exact, wilson
 from .tables import md_table, pct, write_csv
 
 TYPED = ("sqli", "xss", "cmdi", "traversal")
+FIXED_FPR = ((0.01, "det_at_fpr1"), (0.05, "det_at_fpr5"))
 
 
 def _rate(k: int, n: int) -> float:
@@ -38,8 +41,35 @@ def _wrate(mask: np.ndarray, base: np.ndarray, weights: np.ndarray) -> float:
     return float(weights[mask & base].sum()) / total if total else float("nan")
 
 
+def _ranked(score: np.ndarray | None, is_attack: np.ndarray) -> dict:
+    """Threshold-free view of a scoring detector on one cell.
+
+    ``auc`` is the probability that a random attack string scores above a
+    random benign one (ties count half).  ``det_at_fpr1`` and ``det_at_fpr5``
+    are the shares of attack strings flagged when the threshold is set on this
+    cell's own benign strings so that at most 1% or 5% of them are flagged.
+    That threshold uses the test labels, so these are best-case operating
+    points; they make detectors comparable at the same false-positive rate.
+    """
+    out = {"auc": float("nan")} | {key: float("nan") for _, key in FIXED_FPR}
+    if score is None:
+        return out
+    a, b = score[is_attack], score[~is_attack]
+    if not len(a) or not len(b):
+        return out
+    ranks = rankdata(np.concatenate([a, b]))
+    out["auc"] = float((ranks[:len(a)].sum() - len(a) * (len(a) + 1) / 2) / (len(a) * len(b)))
+    desc = np.sort(b)[::-1]
+    for share, key in FIXED_FPR:
+        allowed = int(math.floor(share * len(b)))
+        threshold = desc[allowed] if allowed < len(desc) else -np.inf
+        out[key] = float((a > threshold).mean())
+    return out
+
+
 def _score(flag: np.ndarray, is_attack: np.ndarray, atypes: np.ndarray, known: np.ndarray,
-           weights: np.ndarray, ref: np.ndarray | None = None) -> dict:
+           weights: np.ndarray, ref: np.ndarray | None = None, score: np.ndarray | None = None,
+           overlap: np.ndarray | None = None) -> dict:
     ben, att = ~is_attack, is_attack
     n_b, n_a = int(ben.sum()), int(att.sum())
     fp, tp = int((flag & ben).sum()), int((flag & att).sum())
@@ -68,6 +98,13 @@ def _score(flag: np.ndarray, is_attack: np.ndarray, atypes: np.ndarray, known: n
         out["n_ref_pos"], out["n_ref_neg"] = int(pos.sum()), int(neg.sum())
         out["det_ref_pos"] = _rate(int((flag & pos).sum()), int(pos.sum()))
         out["det_ref_neg"] = _rate(int((flag & neg).sum()), int(neg.sum()))
+    out.update(_ranked(score, is_attack))
+    if overlap is not None:
+        # Strings whose container-free form also occurs in the training split.
+        rest = ~overlap
+        out["overlap_cstrip"] = _rate(int(overlap.sum()), len(overlap))
+        out["fpr_novl"] = _rate(int((flag & ben & rest).sum()), int((ben & rest).sum()))
+        out["det_novl"] = _rate(int((flag & att & rest).sum()), int((att & rest).sum()))
     return out
 
 
@@ -99,6 +136,10 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
     augs = [False, True] if cfg.get("shape_augment", False) else [False]
     do_iv = cfg.get("interventions", True)
     iv_kinds = set(cfg.get("intervention_detectors", ["lr"]))
+    iv_seeds = cfg.get("intervention_seeds", "all")
+    iv_seeds = (set(cfg["seeds"]) if iv_seeds == "all" else
+                {cfg["seeds"][0]} if iv_seeds == "first" else {int(s) for s in iv_seeds})
+    shape_base = cfg.get("shape_baseline", False)
     cells, interventions = [], []
     t0 = time.time()
     # The MLP is stopped early by design, and LightGBM is given unnamed sparse
@@ -106,6 +147,9 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
     warnings.filterwarnings("ignore", message=".*(Maximum iterations|valid feature names).*")
     for si, seed in enumerate(cfg["seeds"]):
         splits = split_all(cfg, corpus, seed)
+        iv_here = do_iv and seed in iv_seeds
+        # Container-free form of every test string, for the overlap check.
+        cs_test = {tgt: [preprocess(r["text"], "cstrip") for r in splits[tgt][1]] for tgt in names}
         # Signatures need no training, so their verdict on every test string
         # is computed once per seed.  The canonicalized verdict doubles as a
         # reference: does a string show explicit injection syntax or not?
@@ -123,6 +167,8 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
             train_keys = {r["key"] for r in train}
             xtr = [r["text"] for r in train]
             ytr = [r["atype"] for r in train]
+            train_cs = {preprocess(x, "cstrip") for x in xtr}
+            train_cs.discard("")
 
             # Test view of every source for this training source: strings that
             # also occur in the training split are purged.
@@ -133,6 +179,8 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                 rows = [r for r, k in zip(test, keep) if k]
                 texts = [r["text"] for r in rows]
                 v = {"keep": keep, "texts": texts, "purged": int((~keep).sum()),
+                     "overlap": np.array([c in train_cs for c, k in zip(cs_test[tgt], keep) if k],
+                                         dtype=bool),
                      "is_attack": np.array([r["y"] == "attack" for r in rows], dtype=bool),
                      "atypes": np.array([r["atype"] for r in rows], dtype=object),
                      "weights": np.array([float(r.get("weight", 1)) for r in rows]),
@@ -141,17 +189,18 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                 if has_crs:
                     v["crs"] = {lvl: np.array([r[f"crs{lvl}"] for r in rows], dtype=bool)
                                 for lvl in (1, 2)}
-                if si == 0 and do_iv:
+                if iv_here:
                     v["vtexts"] = {name: [fn(t, seed) for t in texts] for name, fn in INTERVENTIONS.items()}
                     v["changed"] = {name: np.array([a != b for a, b in zip(texts, vt)], dtype=bool)
                                     for name, vt in v["vtexts"].items()}
                 view[tgt] = v
 
-            def record(name, tgt, flag, known):
+            def record(name, tgt, flag, known, score=None):
                 v = view[tgt]
                 row = {"seed": seed, "source": src, "target": tgt, "config": name,
                        "n_train": len(train), "purged": v["purged"]}
-                row.update(_score(flag, v["is_attack"], v["atypes"], known, v["weights"], v["ref"]))
+                row.update(_score(flag, v["is_attack"], v["atypes"], known, v["weights"], v["ref"],
+                                  score, v["overlap"]))
                 cells.append(row)
 
             if "sig" in cfg["detectors"]:
@@ -166,7 +215,7 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                         flag = view[tgt]["crs"][lvl]
                         record(f"crs-pl{lvl}", tgt, flag, np.ones(len(flag), dtype=bool))
 
-            want_iv = si == 0 and do_iv and any(k in iv_kinds for k in kinds + nl_kinds)
+            want_iv = iv_here and any(k in iv_kinds for k in kinds + nl_kinds)
             if "vmil" in cfg["preprocess"]:
                 space = ValueSpace(cfg.get("tokenizer", "web"), cfg.get("max_features", 4000),
                                    rounds=cfg.get("mil_rounds", 2))
@@ -179,7 +228,7 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                     name = config_name(kind, "vmil", False)
                     for tgt in names:
                         flag, known = space.flags(clf, *B[tgt])
-                        record(name, tgt, flag, known)
+                        record(name, tgt, flag, known, space.scores(clf, *B[tgt]))
                         if want_iv and kind in iv_kinds:
                             vflags = {vn: space.flags(clf, *BV[(tgt, vn)])[0] for vn in INTERVENTIONS}
                             _intervene(interventions, flag, vflags, view[tgt]["changed"],
@@ -201,19 +250,32 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                         for tgt in names:
                             flag = np.asarray(clf.predict(X[tgt]), dtype=object) != "benign"
                             known = np.asarray(X[tgt].getnnz(axis=1) > 0)
-                            record(name, tgt, flag, known)
+                            record(name, tgt, flag, known, attack_score(clf, X[tgt]))
                             if want_iv and kind in iv_kinds:
                                 vflags = {vn: np.asarray(clf.predict(XV[(tgt, vn)]), dtype=object) != "benign"
                                           for vn in INTERVENTIONS}
                                 _intervene(interventions, flag, vflags, view[tgt]["changed"],
                                            view[tgt]["is_attack"],
                                            {"seed": seed, "source": src, "target": tgt, "config": name})
+            if shape_base:
+                # Baseline that sees only the container: one-hot shape and the
+                # number of key=value pairs, nothing of the content.
+                shp = lambda texts: np.array([shape_features(x) for x in texts]) \
+                    if texts else np.zeros((0, 6))
+                clf = make_clf("lr", seed).fit(shp(xtr), ytr)
+                for tgt in names:
+                    Xs = shp(view[tgt]["texts"])
+                    if not len(Xs):
+                        continue
+                    flag = np.asarray(clf.predict(Xs), dtype=object) != "benign"
+                    record(config_name("shape", "lr", False), tgt, flag,
+                           np.ones(len(flag), dtype=bool), attack_score(clf, Xs))
             log(f"  seed {seed} source {src}: done ({time.time() - t0:.0f}s)")
 
-    # Holm adjustment within each configuration and class.
+    # Holm adjustment within each seed, configuration and class.
     groups = defaultdict(list)
     for i, r in enumerate(interventions):
-        groups[(r["config"], r["class"])].append(i)
+        groups[(r["seed"], r["config"], r["class"])].append(i)
     for idx in groups.values():
         for i, p in zip(idx, holm([interventions[i]["p_mcnemar"] for i in idx])):
             interventions[i]["p_holm"] = p
@@ -235,8 +297,9 @@ def summarize(cells: list[dict]) -> list[dict]:
         groups[(r["source"], r["target"], r["config"])].append(r)
     out = []
     metrics = ["fpr", "det", "bal_acc", "fpr_abstain", "det_abstain", "fpr_w", "det_w",
-               "no_evidence_benign", "no_evidence_attack", "det_ref_pos", "det_ref_neg"] + \
-              [f"det_{t}" for t in TYPED]
+               "no_evidence_benign", "no_evidence_attack", "det_ref_pos", "det_ref_neg",
+               "auc", "overlap_cstrip", "fpr_novl", "det_novl"] + \
+              [key for _, key in FIXED_FPR] + [f"det_{t}" for t in TYPED]
     for (src, tgt, config), rs in groups.items():
         row = {"source": src, "target": tgt, "config": config, "seeds": len(rs),
                "n_benign": rs[0]["n_benign"], "n_attack": rs[0]["n_attack"],
@@ -244,7 +307,7 @@ def summarize(cells: list[dict]) -> list[dict]:
                "n_ref_pos": rs[0].get("n_ref_pos", 0), "n_ref_neg": rs[0].get("n_ref_neg", 0),
                "purged": rs[0]["purged"]}
         for m in metrics:
-            row[m], row[m + "_sd"] = mean_sd([float(r[m]) for r in rs])
+            row[m], row[m + "_sd"] = mean_sd([float(r.get(m, float("nan"))) for r in rs])
         out.append(row)
     return out
 
@@ -277,8 +340,113 @@ def per_source(summary: list[dict], config: str, names: list[str]) -> list[dict]
     return out
 
 
+def pool_seeds(interventions: list[dict]) -> list[dict]:
+    """One row per train/test/config/variant/class, pooled over seeds.
+
+    Rates are averaged.  ``p_holm`` becomes the largest per-seed value, so a
+    pooled row counts as significant only if the change is significant in
+    every seed; ``sig_seeds`` says in how many seeds it was.
+    """
+    groups = defaultdict(list)
+    for r in interventions:
+        groups[(r["source"], r["target"], r["config"], r["variant"], r["class"])].append(r)
+    out = []
+    for (src, tgt, config, variant, cls), rs in groups.items():
+        mean = lambda k: sum(float(r[k]) for r in rs) / len(rs)
+        out.append({"source": src, "target": tgt, "config": config, "variant": variant,
+                    "class": cls, "n": rs[0]["n"], "n_changed": rs[0]["n_changed"],
+                    "seeds": len(rs), "flagged_native": mean("flagged_native"),
+                    "flagged_variant": mean("flagged_variant"), "delta": mean("delta"),
+                    "became_flagged": mean("became_flagged"), "became_clear": mean("became_clear"),
+                    "p_holm": max(float(r["p_holm"]) for r in rs),
+                    "sig_seeds": sum(float(r["p_holm"]) < 0.05 for r in rs)})
+    return out
+
+
+def _per_seed_counts(interventions: list[dict], keep) -> str:
+    """'a / b / c of n': significant cells per seed among rows selected by keep."""
+    seeds = sorted({r["seed"] for r in interventions})
+    parts, total = [], 0
+    for s in seeds:
+        rows = [r for r in interventions if r["seed"] == s and keep(r)]
+        total = max(total, len(rows))
+        parts.append(str(sum(float(r["p_holm"]) < 0.05 for r in rows)))
+    return f"{' / '.join(parts)} of {total}"
+
+
+def _cross_mean(table: dict, sources: list[str], metric: str) -> float:
+    """Mean over training sources of the mean over the other sources."""
+    per = []
+    for s in sources:
+        vals = [float(table[(s, t)][metric]) for t in sources if t != s and (s, t) in table]
+        vals = [v for v in vals if not math.isnan(v)]
+        if vals:
+            per.append(sum(vals) / len(vals))
+    return sum(per) / len(per) if per else float("nan")
+
+
+def report_robustness(summary: list[dict], names: list[str], configs: list[str],
+                      groups: list[list[str]] | None, exclude: list[str]) -> str:
+    """Cross-dataset means when dependent or special sources are left out."""
+    picks = [c for c in ("lr-raw", "lr-canon", "lr-cstrip", "lr-vmil", "svm-vmil", "crs-pl1",
+                         "shape-lr") if c in configs]
+    if not picks:
+        return ""
+    subsets = [("all benchmark sources", [names])]
+    for g in groups or []:
+        g = [n for n in g if n in names]
+        if len(g) > 1:
+            label = "one of " + " / ".join(g) + " at a time"
+            subsets.append((label, [[n for n in names if n not in g or n == rep] for rep in g]))
+    for x in exclude:
+        if x in names:
+            subsets.append((f"without {x}", [[n for n in names if n != x]]))
+    md = ("\n**Robustness: cross-dataset means with dependent or special sources left out** "
+          "(a source left out is neither trained on nor tested on; for a provenance group the "
+          "range over the choice of member is shown)\n\n")
+    rows = []
+    for config in picks:
+        table = _lookup(summary, config)
+        line = [f"`{config}`"]
+        for _, variants in subsets:
+            for metric in ("fpr", "bal_acc"):
+                vals = [_cross_mean(table, v, metric) for v in variants]
+                lo, hi = min(vals), max(vals)
+                line.append(pct(lo) if abs(hi - lo) < 5e-4 else f"{pct(lo)}-{pct(hi)}")
+        rows.append(line)
+    header = ["config"]
+    for label, variants in subsets:
+        header += [f"FPR ({label}, {len(variants[0])} sources)", f"bal.acc ({label})"]
+    md += md_table(header, rows)
+    return md
+
+
+def report_fixed_fpr(summary: list[dict], names: list[str], configs: list[str]) -> str:
+    """Detection at the same false-positive rate, for detectors that score."""
+    rows = []
+    for config in configs:
+        table = _lookup(summary, config)
+        own = [table[(s, s)] for s in names if (s, s) in table]
+        other = [table[(s, t)] for s in names for t in names if s != t and (s, t) in table]
+        if not own or math.isnan(_mean(r.get("auc", float("nan")) for r in other)):
+            continue
+        line = [f"`{config}`"]
+        for key in ("auc", "det_at_fpr1", "det_at_fpr5"):
+            line += [pct(_mean(r[key] for r in own)), pct(_mean(r[key] for r in other))]
+        rows.append(line)
+    if not rows:
+        return ""
+    md = ("\n**Ranking quality and detection at a fixed false-positive rate** (threshold set on "
+          "each cell's own benign strings so that at most 1% or 5% are flagged; a best-case "
+          "operating point that puts every detector at the same FPR; mean over cells)\n\n")
+    md += md_table(["config", "AUC own", "AUC other", "det @1% FPR own", "det @1% FPR other",
+                    "det @5% FPR own", "det @5% FPR other"], rows)
+    return md
+
+
 def report_transfer(summary: list[dict], names: list[str], headline: str, configs: list[str],
-                    held: set[str] = frozenset()) -> str:
+                    held: set[str] = frozenset(), groups: list[list[str]] | None = None,
+                    exclude: list[str] = ()) -> str:
     # Held-out (test-only) sources get their own section; the matrices and
     # cross-dataset means here cover the two-class benchmark sources only.
     names = [n for n in names if n not in held]
@@ -379,14 +547,34 @@ def report_transfer(summary: list[dict], names: list[str], headline: str, config
                      ci(p["out_bal_acc"] for p in ps),
                      ci(p["out_bal_acc"] - p["in_bal_acc"] for p in ps) if trained else "-"])
     md += md_table(["config", "FPR out", "FPR gap", "bal.acc out", "bal.acc gap"], rows)
+
+    own = [r for (a, b), r in table.items() if a == b and "overlap_cstrip" in r]
+    other = [r for (a, b), r in table.items() if a != b and "overlap_cstrip" in r]
+    if own and other and not math.isnan(_mean(r["overlap_cstrip"] for r in own)):
+        worst = max(other, key=lambda r: float(r["overlap_cstrip"]))
+        md += ("\n**Overlap after the container is removed.** Share of test strings whose "
+               "container-free, canonicalized form also occurs in the training split: "
+               f"{pct(_mean(r['overlap_cstrip'] for r in own))}% on the own source (mean; "
+               f"largest {pct(max(float(r['overlap_cstrip']) for r in own))}%), "
+               f"{pct(_mean(r['overlap_cstrip'] for r in other))}% on other sources (mean; largest "
+               f"{pct(float(worst['overlap_cstrip']))}%, {worst['source']} -> {worst['target']}). "
+               f"Without those strings, `{headline}` flags {pct(_mean(r['fpr_novl'] for r in other))}% "
+               f"of benign and {pct(_mean(r['det_novl'] for r in other))}% of attack strings on other "
+               f"sources (all strings: {pct(_mean(r['fpr'] for r in other))}% and "
+               f"{pct(_mean(r['det'] for r in other))}%).\n")
+    md += report_robustness(summary, names, configs, groups, list(exclude))
+    md += report_fixed_fpr(summary, names, configs)
     return md
 
 
 def report_interventions(interventions: list[dict], names: list[str], headline: str) -> str:
     if not interventions:
         return ""
+    raw, interventions = interventions, pool_seeds(interventions)
+    seeds = len({r["seed"] for r in raw})
     md = "## 4. Shape-only interventions\n\n"
-    md += (f"Configuration `{headline}`, first seed. Each model is tested on its **own** source's "
+    md += (f"Configuration `{headline}`, {seeds} seed(s), rates averaged over seeds. Each model is "
+           "tested on its **own** source's "
            "test split, first as collected and then with only the container changed "
            "(`bare`: keys removed; `kv`: wrapped as key=value; `json`: flat JSON object). "
            "Content is identical, so any change is caused by shape.\n\n")
@@ -409,7 +597,8 @@ def report_interventions(interventions: list[dict], names: list[str], headline: 
             rows.append(line[:2] + [pct(base)] + line[2:])
     md += md_table(["source", "class", "flagged as collected (%)"] +
                    [f"as {v} (%)" for v in INTERVENTIONS], rows)
-    md += "\n`*` Holm-adjusted exact McNemar p < 0.05 within this configuration and class.\n"
+    md += ("\n`*` Holm-adjusted exact McNemar p < 0.05 in every seed (Holm within each seed, "
+           "configuration and class).\n")
 
     md += ("\n**Benign decisions changed by the container alone, per configuration** "
            "(own test split, summed over sources)\n\n")
@@ -422,17 +611,24 @@ def report_interventions(interventions: list[dict], names: list[str], headline: 
         line = [f"`{config}`", sum(r["n"] for r in own if r["variant"] == "kv")]
         for v in INTERVENTIONS:
             vs = [r for r in own if r["variant"] == v]
-            line.append(sum(r["became_flagged"] + r["became_clear"] for r in vs))
+            line.append(round(sum(r["became_flagged"] + r["became_clear"] for r in vs)))
         rows.append(line)
     md += md_table(["config", "benign strings"] + [f"changed as {v}" for v in INTERVENTIONS], rows)
 
     sel = [r for r in interventions if r["config"] == headline]
+    n_src = len({r["source"] for r in sel})
     for cls in ("benign", "attack"):
         sub = [r for r in sel if r["class"] == cls]
+        if not sub:
+            continue
         sig = sum(r["p_holm"] < 0.05 for r in sub)
+        n_tgt = len({r["target"] for r in sub})
         big = max(sub, key=lambda r: abs(r["delta"]))
-        md += (f"\nAcross all {len(sub)} train/test/variant cells for the {cls} class, {sig} change "
-               f"significantly after Holm adjustment; the largest shift is "
+        per_seed = _per_seed_counts(raw, lambda r, c=cls: r["config"] == headline and r["class"] == c)
+        md += (f"\nFor the {cls} class there are {len(sub)} train/test/variant cells "
+               f"({n_src} training sources x {n_tgt} test sources with {cls} strings x "
+               f"{len(INTERVENTIONS)} rewrites). Significant after Holm adjustment, per seed: "
+               f"{per_seed}; in every seed: {sig}. The largest mean shift is "
                f"{100 * big['delta']:+.1f} points ({big['source']} -> {big['target']}, as {big['variant']}).\n")
     return md
 
@@ -530,7 +726,22 @@ def report_held_out(summary: list[dict], interventions: list[dict], names: list[
         md += f"\n`{g}`: {GROUPS.get(g, g)}: " + ", ".join(h for h in held_names if group_of[h] == g) + "."
     md += "\n"
 
-    sel = [r for r in interventions if r["config"] == headline and r["target"] in held]
+    ctl_rows = []
+    meta = set("'\"`;|&$<>(){}[]\\")
+    crs_tab = _lookup(summary, "crs-pl1")
+    for h in with_control:
+        ctl = [r for r in corpus[h] if r["y"] == "benign"]
+        crs_cell = next((crs_tab[(b, h)] for b in bench if (b, h) in crs_tab), None)
+        ctl_rows.append([h, len(ctl), pct(_mean(float(any(ch in meta for ch in r["text"])) for r in ctl)),
+                         pct(float(crs_cell["fpr"])) if crs_cell else "-"])
+    if ctl_rows:
+        md += "\n**Is the control class a fair negative?**\n\n"
+        md += md_table(["source", "control strings", "with shell or SQL metacharacters (%)",
+                        "blocked by CRS level 1 (%)"], ctl_rows)
+        md += ("\nMetacharacters: quote, backtick, semicolon, pipe, ampersand, dollar, angle "
+               "brackets, parentheses, braces, square brackets, backslash.\n")
+
+    sel = [r for r in pool_seeds(interventions) if r["config"] == headline and r["target"] in held]
     if sel:
         rows = []
         for h in held_names:
@@ -544,10 +755,10 @@ def report_held_out(summary: list[dict], interventions: list[dict], names: list[
                     sig = sum(r["p_holm"] < 0.05 for r in vs)
                     line.append(f"{pct(_mean(r['flagged_variant'] for r in vs))} ({sig}/{len(vs)})")
                 rows.append(line)
-        md += (f"\n**Same strings, container changed (`{headline}`, first seed, distinct, %, mean over "
-               "training sources)**\n\n")
+        md += (f"\n**Same strings, container changed (`{headline}`, distinct, %, mean over "
+               "training sources and seeds)**\n\n")
         md += md_table(["source", "class", "as observed"] + [f"as {v}" for v in INTERVENTIONS], rows)
-        md += ("\nIn brackets: training sources for which the change is significant "
+        md += ("\nIn brackets: training sources for which the change is significant in every seed "
                "(Holm-adjusted exact McNemar p < 0.05).\n")
     return md
 
@@ -557,7 +768,8 @@ REMEDIES = (("canon+aug", "shape augmentation"), ("cstrip", "container removed")
 
 
 def report_remedies(summary: list[dict], cells: list[dict], names: list[str], held: set[str],
-                    cfg: dict, corpus: dict[str, list[dict]]) -> str:
+                    cfg: dict, corpus: dict[str, list[dict]],
+                    groups: list[list[str]] | None = None) -> str:
     """Paired comparison of each remedy with plain canonicalization.
 
     The unit is the training source: for every source, the mean over the other
@@ -638,6 +850,39 @@ def report_remedies(summary: list[dict], cells: list[dict], names: list[str], he
         md += md_table(["configuration", "remedy", "canon", "remedy",
                         "difference, points [95% bootstrap]", "better", "p", "p (Holm, LR)"], rows)
 
+    # Sources that share provenance are not independent units.  Averaging
+    # within each provenance group makes the group the unit instead.
+    bench_groups = [[n for n in g if n in bench] for g in (groups or [])]
+    bench_groups = [g for g in bench_groups if g]
+    if bench_groups and any(len(g) > 1 for g in bench_groups) and "lr-canon" in have:
+        md += ("\n**Provenance groups as the unit** (each group's mean difference over its member "
+               "training sources; groups: " + "; ".join(" + ".join(g) for g in bench_groups) + ")\n\n")
+        rows, ps = [], []
+        for title, metric, targets, direction in views[:3]:
+            for suffix, label in REMEDIES:
+                treat = f"lr-{suffix}"
+                if treat not in have:
+                    continue
+                b = per_source_metric("lr-canon", metric, targets)
+                t_ = per_source_metric(treat, metric, targets)
+                diffs = [_mean(t_[s_] - b[s_] for s_ in g if s_ in b and s_ in t_) for g in bench_groups]
+                diffs = [d for d in diffs if not math.isnan(d)]
+                if not diffs:
+                    continue
+                _, pval, _ = wilcoxon_exact(diffs)
+                _, lo, hi = bootstrap_mean(diffs)
+                better = sum(d * direction > 0 for d in diffs)
+                rows.append([title, f"`{treat}`",
+                             f"{100 * sum(diffs) / len(diffs):+.1f} [{100 * lo:+.1f}, {100 * hi:+.1f}]",
+                             f"{better}/{len(diffs)}", f"{pval:.3f}", ""])
+                ps.append(pval)
+        for r, adj in zip(rows, holm(ps)):
+            r[5] = f"{adj:.3f}"
+        md += md_table(["metric", "configuration", "difference vs lr-canon, points [95% bootstrap]",
+                        "better", "p", "p (Holm, all rows)"], rows)
+        md += (f"\nWith {len(bench_groups)} units the smallest attainable two-sided p is "
+               f"{2 / 2 ** len(bench_groups):.3f}.\n")
+
     # Robustness of the headline comparison across seeds and cells.
     if "lr-canon" in have and "lr-cstrip" in have:
         md += "\n**`lr-cstrip` against `lr-canon`: FPR on the other benchmark sources, per seed**\n\n"
@@ -667,16 +912,22 @@ def report_evasion(interventions: list[dict], names: list[str], held: set[str]) 
     variant, which removes a container, is in interventions.csv.)
     """
     bench = [n for n in names if n not in held]
-    sel = [r for r in interventions if r["class"] == "attack" and r["source"] in bench
+    raw = [r for r in interventions if r["class"] == "attack" and r["source"] in bench
            and r["target"] in bench]
-    if not sel:
+    if not raw:
         return ""
+    sel = pool_seeds(raw)
+    n_seeds = len({r["seed"] for r in raw})
     variants = [v for v in ("kv", "json") if v in INTERVENTIONS]
     md = "## 8. Container change as an evasion vector\n\n"
-    md += ("Attack strings of each test split, re-sent with only the container changed (first "
-           "seed). `missed` counts attacks that were flagged as collected and are no longer "
-           "flagged. `significant drops` counts train/test cells where detection falls "
-           "(Holm-adjusted exact McNemar p < 0.05 within the configuration).\n")
+    md += (f"Attack strings of each test split, re-sent with only the container changed ({n_seeds} "
+           "seed(s), rates averaged). `missed` counts attacks that were flagged as collected and "
+           "are no longer flagged (mean over seeds). `significant drops` counts train/test cells "
+           "where detection falls in every seed (Holm-adjusted exact McNemar p < 0.05 within each "
+           "seed and configuration); `per seed` gives the count in each seed. The rewrite keeps the "
+           "payload's characters; whether the attack would still work against a real application "
+           "is not tested, so a drop measures how sensitive the prediction is to the "
+           "representation.\n")
     for title, same in (("Own source (in-distribution)", True), ("Other benchmark sources", False)):
         rows = []
         for config in sorted({r["config"] for r in sel}):
@@ -686,21 +937,25 @@ def report_evasion(interventions: list[dict], names: list[str], held: set[str]) 
             total = sum(r["n"] for r in sub if r["variant"] == variants[0])
             line = [f"`{config}`", total, pct(_mean(r["flagged_native"] for r in sub
                                                     if r["variant"] == variants[0]))]
-            drops = []
+            drops, seeds_txt = [], []
             for v in variants:
                 vs = [r for r in sub if r["variant"] == v]
                 worst = min(vs, key=lambda r: r["delta"])
                 where = worst["source"] + ("" if same else f" -> {worst['target']}")
                 line += [pct(_mean(r["flagged_variant"] for r in vs)),
-                         sum(r["became_clear"] for r in vs),
+                         round(sum(r["became_clear"] for r in vs)),
                          f"{100 * worst['delta']:+.1f} ({where})"]
                 drops.append(f"{sum(r['p_holm'] < 0.05 and r['delta'] < 0 for r in vs)}/{len(vs)}")
-            rows.append(line + [" , ".join(drops)])
+                keep = (lambda r, c=config, vv=v: r["config"] == c and r["variant"] == vv
+                        and (r["source"] == r["target"]) == same and float(r["delta"]) < 0)
+                seeds_txt.append(_per_seed_counts(raw, keep).split(" of ")[0])
+            rows.append(line + [" , ".join(drops), " , ".join(seeds_txt)])
         header = ["config", "attack strings", "flagged as collected (%)"]
         for v in variants:
             header += [f"as {v} (%)", f"missed ({v})", f"largest drop, points ({v})"]
         header.append("significant drops (" + " , ".join(variants) + ")")
+        header.append("per seed (" + " , ".join(variants) + ")")
         md += f"\n**{title}**\n\n" + md_table(header, rows)
-    md += ("\nA drop means the detector can be evaded by repackaging alone. A rise means it was "
-           "reacting to the container rather than to the payload.\n")
+    md += ("\nA drop means the prediction can be changed by repackaging alone. A rise means the "
+           "detector was reacting to the container as well as to the payload.\n")
     return md

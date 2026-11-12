@@ -20,7 +20,8 @@ DEFAULTS = {
     "nonlinear_detectors": ["rf", "gbm", "mlp"], "nonlinear_preprocess": ["raw", "canon", "cstrip"],
     "crs_path": "data/raw/coreruleset", "crs_workers": 2,
     "shape_augment": True, "interventions": True,
-    "intervention_detectors": ["lr", "rf", "gbm", "mlp"],
+    "intervention_detectors": ["lr", "rf", "gbm", "mlp"], "intervention_seeds": "all",
+    "shape_baseline": True, "robustness_exclude": ["crs"],
     "headline": "lr-raw", "out_dir": "out",
 }
 
@@ -166,7 +167,12 @@ def cmd_render(args, cfg, base, out):
     configs = [config_name(*g) for g in detector_grid(cfg)]
     names = list(corpus)
     held = held_out_sources(cfg)
-    md3 = report_transfer(summary, names, cfg["headline"], configs, held)
+    groups = None
+    if (out / "audit_overlap.csv").exists():
+        from .audit import provenance_groups
+        groups, _ = provenance_groups(read_typed_csv(out / "audit_overlap.csv"), names, held)
+    md3 = report_transfer(summary, names, cfg["headline"], configs, held, groups,
+                          cfg.get("robustness_exclude", []))
     md4 = report_interventions(interventions, [n for n in names if n not in held], cfg["headline"])
     reference = "crs" if all("crs1" in rows[0] for rows in corpus.values() if rows) else "sig"
     md6 = report_held_out(summary, interventions, names, held, cfg["headline"], configs, cfg, corpus,
@@ -175,7 +181,7 @@ def cmd_render(args, cfg, base, out):
     (out / "section_8_evasion.md").write_text(md8, encoding="utf-8")
     (out / "section_3_transfer.md").write_text(md3, encoding="utf-8")
     (out / "section_4_interventions.md").write_text(md4, encoding="utf-8")
-    md7 = report_remedies(summary, cells, names, held, cfg, corpus)
+    md7 = report_remedies(summary, cells, names, held, cfg, corpus, groups)
     (out / "section_6_held_out.md").write_text(md6, encoding="utf-8")
     (out / "section_7_remedies.md").write_text(md7, encoding="utf-8")
     print(md3 + "\n" + md4 + "\n" + md6 + "\n" + md7 + "\n" + md8)

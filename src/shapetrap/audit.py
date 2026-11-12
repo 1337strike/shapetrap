@@ -86,31 +86,8 @@ def run_audit(corpus: dict[str, list[dict]], out_dir: Path, link_threshold: floa
            f"{pct(worst['benign_value_share'])}% ({worst['benign_value_n']} shared values), "
            f"against {pct(worst['normalized_share'])}% at string level.\n")
     # Sources linked by a large overlap are not independent collections.
-    parent = {n: n for n in names}
-
-    def find(n):
-        while parent[n] != n:
-            n = parent[n]
-        return n
-
-    # Provenance clusters are drawn among the benchmark (trainable) sources.
-    # Pairs involving a held-out source are listed separately: there a large
-    # overlap usually means a shared payload list or a common credential
-    # dictionary, which is a property of the traffic, not of the collection.
-    other_pairs = []
-    for r in rows:
-        shares = [r["normalized_share"], r["benign_value_share"]]
-        if not any(v == v and v >= link_threshold for v in shares):
-            continue
-        if r["a"] in held or r["b"] in held:
-            other_pairs.append(f"{r['a']} / {r['b']}")
-        else:
-            parent[find(r["a"])] = find(r["b"])
-    clusters = {}
-    for n in names:
-        if n not in held:
-            clusters.setdefault(find(n), []).append(n)
-    linked = [c for c in clusters.values() if len(c) > 1]
+    groups, other_pairs = provenance_groups(rows, names, held, link_threshold)
+    linked = [c for c in groups if len(c) > 1]
     if linked:
         md += (f"\nBenchmark sources linked at >= {pct(link_threshold, 0)}% on either level (shared "
                "provenance, not independent collections): " + "; ".join(" + ".join(c) for c in linked) + ".\n")
@@ -122,3 +99,39 @@ def run_audit(corpus: dict[str, list[dict]], out_dir: Path, link_threshold: floa
     total_conf = sum(r["label_conflicts"] for r in rows)
     md += f"\nCross-source label conflicts on normalized strings: {total_conf}.\n"
     return md
+
+
+def provenance_groups(rows: list[dict], names: list[str], held=frozenset(),
+                      link_threshold: float = 0.25) -> tuple[list[list[str]], list[str]]:
+    """Benchmark sources grouped by shared provenance.
+
+    Two sources are linked when their normalized-string overlap or their
+    benign value-level overlap reaches ``link_threshold``; groups are the
+    connected components.  Pairs involving a held-out source are returned
+    separately: there a large overlap usually means a shared payload list or a
+    common credential dictionary, which is a property of the traffic, not of
+    the collection.
+    """
+    parent = {n: n for n in names}
+
+    def find(n):
+        while parent[n] != n:
+            n = parent[n]
+        return n
+
+    other_pairs = []
+    for r in rows:
+        if r["a"] not in parent or r["b"] not in parent:
+            continue
+        shares = [float(r["normalized_share"]), float(r["benign_value_share"])]
+        if not any(v == v and v >= link_threshold for v in shares):
+            continue
+        if r["a"] in held or r["b"] in held:
+            other_pairs.append(f"{r['a']} / {r['b']}")
+        else:
+            parent[find(r["a"])] = find(r["b"])
+    clusters: dict[str, list[str]] = {}
+    for n in names:
+        if n not in held:
+            clusters.setdefault(find(n), []).append(n)
+    return list(clusters.values()), other_pairs
