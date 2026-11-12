@@ -532,7 +532,7 @@ def report_transfer(summary: list[dict], names: list[str], headline: str, config
     md += ("\n**Source-level bootstrap, 95% interval** (10,000 resamples of the training "
            "sources; `gap` is cross-dataset minus in-distribution)\n\n")
     picks = [c for c in configs if c.endswith("-raw") or c in
-             ("lr-canon", "lr-cstrip", "lr-vmil", "sig-canon", "crs-pl1", "crs-pl2")]
+             ("lr-canon", "lr-cstrip", "lr-vmil", "sig-canon", "crs-pl1", "crs-pl2", "shape-lr")]
     rows = []
     for config in picks:
         ps = per_source(summary, config, names)
