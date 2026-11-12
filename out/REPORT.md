@@ -1,6 +1,6 @@
 # shapetrap audit report
 
-Generated 2026-11-11 15:05 · Python 3.12.10 · scikit-learn 1.9.1 · NumPy 2.5.4 · SciPy 1.18.1
+Generated 2026-11-12 18:19 · Python 3.12.10 · scikit-learn 1.9.1 · NumPy 2.5.4 · SciPy 1.18.1
 
 Seeds [42, 43, 44] · test share 0.25 · cap 20000 per class · tokenizer `web` · 4000 features
 
@@ -243,6 +243,7 @@ Headline configuration: `lr-raw`. Rows are the training source, columns the test
 | `mlp-cstrip` | 10.9 | 29.1 | 93.8 | 76.4 | 91.4 | 73.7 | 23.0 | 76.0 |
 | `crs-pl1` | 5.9 | 5.9 | 75.2 | 75.4 | 84.7 | 84.8 | 5.9 | 75.4 |
 | `crs-pl2` | 19.8 | 19.8 | 86.9 | 87.0 | 83.6 | 83.6 | 19.8 | 87.0 |
+| `shape-lr` | 15.5 | 55.2 | 44.6 | 54.5 | 64.6 | 49.7 | 55.2 | 54.5 |
 
 "Abstain" lets an input through when it shares no feature with the model's vocabulary, instead of deciding from the intercept or prior.
 
@@ -274,55 +275,103 @@ Headline configuration: `lr-raw`. Rows are the training source, columns the test
 | `mlp-raw` | 42.8 [20.7, 65.8] | 32.6 [12.2, 53.2] | 62.7 [58.1, 67.2] | -30.6 [-37.5, -21.7] |
 | `crs-pl1` | 5.9 [5.2, 6.4] | - | 84.8 [83.6, 86.1] | - |
 | `crs-pl2` | 19.8 [17.8, 21.6] | - | 83.6 [82.4, 84.9] | - |
+| `shape-lr` | 55.2 [32.3, 76.0] | 39.7 [7.1, 69.7] | 49.7 [44.9, 54.6] | -14.9 [-30.7, -0.4] |
+
+**Overlap after the container is removed.** Share of test strings whose container-free, canonicalized form also occurs in the training split: 3.3% on the own source (mean; largest 9.6%), 0.4% on other sources (mean; largest 7.5%, modsec -> paper1x). Without those strings, `lr-raw` flags 47.2% of benign and 67.0% of attack strings on other sources (all strings: 47.2% and 67.0%).
+
+**Robustness: cross-dataset means with dependent or special sources left out** (a source left out is neither trained on nor tested on; for a provenance group the range over the choice of member is shown)
+
+| config | FPR (all benchmark sources, 8 sources) | bal.acc (all benchmark sources) | FPR (one of hpd / csic / gran at a time, 6 sources) | bal.acc (one of hpd / csic / gran at a time) | FPR (without crs, 7 sources) | bal.acc (without crs) |
+|---|---|---|---|---|---|---|
+| `lr-raw` | 47.2 | 59.9 | 37.9-44.4 | 58.1-62.2 | 46.1 | 60.0 |
+| `lr-canon` | 49.7 | 64.8 | 44.5-48.8 | 61.3-67.2 | 48.5 | 65.6 |
+| `lr-cstrip` | 28.8 | 73.9 | 26.1-40.1 | 66.4-76.1 | 25.9 | 75.2 |
+| `lr-vmil` | 24.4 | 73.8 | 29.1-36.6 | 64.7-72.1 | 20.1 | 75.9 |
+| `svm-vmil` | 25.7 | 73.9 | 30.3-37.3 | 64.8-72.3 | 20.8 | 76.0 |
+| `crs-pl1` | 5.9 | 84.8 | 4.8-7.8 | 80.6-87.7 | 4.8 | 85.5 |
+| `shape-lr` | 55.2 | 49.7 | 39.2-52.0 | 49.8-54.1 | 54.7 | 47.8 |
+
+**Ranking quality and detection at a fixed false-positive rate** (threshold set on each cell's own benign strings so that at most 1% or 5% are flagged; a best-case operating point that puts every detector at the same FPR; mean over cells)
+
+| config | AUC own | AUC other | det @1% FPR own | det @1% FPR other | det @5% FPR own | det @5% FPR other |
+|---|---|---|---|---|---|---|
+| `lr-raw` | 96.8 | 68.3 | 84.4 | 28.3 | 88.7 | 40.9 |
+| `lr-raw+aug` | 96.7 | 69.7 | 85.3 | 29.7 | 88.6 | 42.5 |
+| `lr-canon` | 95.6 | 78.4 | 81.3 | 39.3 | 85.7 | 54.5 |
+| `lr-canon+aug` | 95.6 | 79.5 | 81.4 | 43.0 | 86.6 | 56.5 |
+| `lr-cstrip` | 93.4 | 83.1 | 77.9 | 43.8 | 82.3 | 59.6 |
+| `lr-vmil` | 93.4 | 83.2 | 77.1 | 40.6 | 81.5 | 53.6 |
+| `mnb-raw` | 93.5 | 71.2 | 77.3 | 32.5 | 79.4 | 44.0 |
+| `mnb-raw+aug` | 94.1 | 74.6 | 78.0 | 35.9 | 82.5 | 47.4 |
+| `mnb-canon` | 93.4 | 80.5 | 77.4 | 47.7 | 79.6 | 58.2 |
+| `mnb-canon+aug` | 93.9 | 83.1 | 77.9 | 52.6 | 81.2 | 63.1 |
+| `mnb-cstrip` | 91.8 | 81.6 | 76.0 | 49.5 | 77.6 | 60.8 |
+| `mnb-vmil` | 91.6 | 81.9 | 76.5 | 49.8 | 77.8 | 59.6 |
+| `svm-raw` | 97.1 | 69.3 | 85.2 | 28.5 | 89.4 | 41.0 |
+| `svm-raw+aug` | 96.9 | 69.1 | 85.1 | 28.1 | 88.4 | 41.2 |
+| `svm-canon` | 96.0 | 78.8 | 82.3 | 39.6 | 85.9 | 54.4 |
+| `svm-canon+aug` | 95.9 | 79.2 | 82.2 | 40.3 | 86.6 | 54.9 |
+| `svm-cstrip` | 93.7 | 83.4 | 78.0 | 42.8 | 82.9 | 59.3 |
+| `svm-vmil` | 93.9 | 83.1 | 78.7 | 39.5 | 83.0 | 53.6 |
+| `rf-raw` | 95.1 | 63.3 | 78.9 | 18.8 | 83.0 | 28.1 |
+| `rf-canon` | 93.9 | 71.0 | 75.5 | 29.2 | 79.3 | 41.5 |
+| `rf-cstrip` | 92.6 | 74.9 | 68.5 | 33.7 | 73.6 | 44.5 |
+| `gbm-raw` | 96.9 | 65.8 | 87.4 | 24.9 | 90.1 | 35.7 |
+| `gbm-canon` | 95.7 | 73.9 | 83.6 | 34.1 | 88.3 | 45.7 |
+| `gbm-cstrip` | 92.3 | 79.8 | 77.8 | 39.1 | 82.5 | 53.3 |
+| `mlp-raw` | 96.1 | 74.3 | 84.9 | 35.0 | 87.5 | 47.8 |
+| `mlp-canon` | 95.3 | 82.4 | 82.2 | 49.3 | 86.0 | 61.9 |
+| `mlp-cstrip` | 93.7 | 84.3 | 79.9 | 51.1 | 83.8 | 63.5 |
+| `shape-lr` | 65.7 | 47.9 | 14.2 | 4.4 | 16.2 | 5.3 |
 
 ## 4. Shape-only interventions
 
-Configuration `lr-raw`, first seed. Each model is tested on its **own** source's test split, first as collected and then with only the container changed (`bare`: keys removed; `kv`: wrapped as key=value; `json`: flat JSON object). Content is identical, so any change is caused by shape.
+Configuration `lr-raw`, 3 seed(s), rates averaged over seeds. Each model is tested on its **own** source's test split, first as collected and then with only the container changed (`bare`: keys removed; `kv`: wrapped as key=value; `json`: flat JSON object). Content is identical, so any change is caused by shape.
 
 | source | class | flagged as collected (%) | as bare (%) | as kv (%) | as json (%) |
 |---|---|---|---|---|---|
-| paper1x | benign | 0.0 | 33.6* | 0.0 | 100.0* |
-| paper1x | attack | 99.6 | 99.6 | 94.0* | 100.0 |
-| hpd | benign | 0.0 | 0.0 | 42.4* | 81.4* |
-| hpd | attack | 99.8 | 99.8 | 99.8 | 100.0 |
-| csic | benign | 39.7 | 99.9* | 39.7 | 90.0* |
-| csic | attack | 88.7 | 98.8* | 88.7 | 99.4* |
-| ecml | benign | 0.1 | 4.3* | 0.1 | 3.6* |
-| ecml | attack | 98.9 | 99.6* | 98.9 | 99.5* |
-| gran | benign | 0.3 | 0.3 | 64.2* | 94.5* |
-| gran | attack | 98.5 | 98.4 | 99.7* | 100.0* |
-| fwaf | benign | 0.5 | 0.5 | 87.5* | 100.0* |
+| paper1x | benign | 0.0 | 37.0* | 0.0 | 100.0* |
+| paper1x | attack | 99.9 | 99.9 | 93.5* | 100.0 |
+| hpd | benign | 0.0 | 0.0 | 49.9* | 86.1* |
+| hpd | attack | 99.8 | 99.8 | 99.9 | 100.0 |
+| csic | benign | 27.7 | 100.0* | 27.7 | 95.1* |
+| csic | attack | 89.7 | 99.4* | 89.7 | 99.5* |
+| ecml | benign | 0.1 | 4.4* | 0.1 | 3.7* |
+| ecml | attack | 98.8 | 99.6* | 98.8 | 99.6* |
+| gran | benign | 0.2 | 0.2 | 60.0* | 94.3* |
+| gran | attack | 98.1 | 97.9 | 99.7* | 100.0* |
+| fwaf | benign | 0.7 | 0.7 | 80.0* | 100.0* |
 | fwaf | attack | 97.1 | 97.1 | 99.8* | 100.0* |
-| modsec | benign | 0.0 | 0.2 | 0.0 | 0.0 |
-| modsec | attack | 100.0 | 99.5* | 100.0 | 99.1* |
-| crs | benign | 37.2 | 54.5* | 36.4 | 63.6* |
-| crs | attack | 92.8 | 92.5 | 86.0* | 95.9 |
+| modsec | benign | 0.0 | 0.3 | 0.0 | 0.0 |
+| modsec | attack | 99.9 | 99.5* | 99.9 | 99.1* |
+| crs | benign | 40.2 | 53.3 | 37.9 | 66.0* |
+| crs | attack | 93.5 | 94.9 | 89.3* | 97.8 |
 
-`*` Holm-adjusted exact McNemar p < 0.05 within this configuration and class.
+`*` Holm-adjusted exact McNemar p < 0.05 in every seed (Holm within each seed, configuration and class).
 
 **Benign decisions changed by the container alone, per configuration** (own test split, summed over sources)
 
 | config | benign strings | changed as bare | changed as kv | changed as json |
 |---|---|---|---|---|
-| `gbm-canon` | 27763 | 1686 | 13066 | 16570 |
-| `gbm-cstrip` | 27763 | 0 | 21 | 24 |
-| `gbm-raw` | 27763 | 1952 | 12560 | 16600 |
-| `lr-canon` | 27763 | 1384 | 9909 | 20090 |
-| `lr-canon+aug` | 27763 | 148 | 41 | 59 |
-| `lr-cstrip` | 27763 | 0 | 48 | 51 |
-| `lr-raw` | 27763 | 1736 | 10694 | 15908 |
-| `lr-raw+aug` | 27763 | 156 | 40 | 51 |
-| `lr-vmil` | 27763 | 128 | 25 | 23 |
-| `mlp-canon` | 27763 | 1451 | 9837 | 18132 |
-| `mlp-cstrip` | 27763 | 0 | 56 | 61 |
-| `mlp-raw` | 27763 | 1479 | 9515 | 14809 |
-| `rf-canon` | 27763 | 1633 | 13544 | 16377 |
-| `rf-cstrip` | 27763 | 0 | 64 | 64 |
-| `rf-raw` | 27763 | 1615 | 14704 | 16430 |
+| `gbm-canon` | 27763 | 1685 | 11169 | 16120 |
+| `gbm-cstrip` | 27763 | 0 | 26 | 25 |
+| `gbm-raw` | 27763 | 2083 | 11721 | 16564 |
+| `lr-canon` | 27763 | 1515 | 8995 | 19692 |
+| `lr-canon+aug` | 27763 | 152 | 38 | 65 |
+| `lr-cstrip` | 27763 | 0 | 36 | 39 |
+| `lr-raw` | 27763 | 2059 | 9669 | 15927 |
+| `lr-raw+aug` | 27763 | 160 | 36 | 53 |
+| `lr-vmil` | 27763 | 118 | 19 | 20 |
+| `mlp-canon` | 27763 | 1451 | 8486 | 17150 |
+| `mlp-cstrip` | 27763 | 0 | 38 | 39 |
+| `mlp-raw` | 27763 | 1495 | 9000 | 14509 |
+| `rf-canon` | 27763 | 1626 | 13159 | 15994 |
+| `rf-cstrip` | 27763 | 0 | 57 | 55 |
+| `rf-raw` | 27763 | 1623 | 13509 | 16245 |
 
-Across all 264 train/test/variant cells for the benign class, 132 change significantly after Holm adjustment; the largest shift is +100.0 points (paper1x -> paper1x, as json).
+For the benign class there are 264 train/test/variant cells (8 training sources x 11 test sources with benign strings x 3 rewrites). Significant after Holm adjustment, per seed: 132 / 132 / 137 of 264; in every seed: 126. The largest mean shift is +100.0 points (paper1x -> paper1x, as json).
 
-Across all 384 train/test/variant cells for the attack class, 188 change significantly after Holm adjustment; the largest shift is +97.2 points (paper1x -> csic, as json).
+For the attack class there are 384 train/test/variant cells (8 training sources x 16 test sources with attack strings x 3 rewrites). Significant after Holm adjustment, per seed: 188 / 199 / 201 of 384; in every seed: 178. The largest mean shift is +97.7 points (paper1x -> csic, as json).
 
 ## 5. What the logistic model learned (`lr-raw`)
 
@@ -492,28 +541,39 @@ The reference is the real OWASP Core Rule Set run through libmodsecurity. It mar
 | `mlp-cstrip` | 77.1 | 17.0 | 37.0 | 16.8 | 54.7 | - |
 | `crs-pl1` | 94.3 | 0.1 | 35.1 | 0.0 | 85.7 | - |
 | `crs-pl2` | 97.2 | 0.3 | 39.3 | 0.1 | 89.8 | - |
+| `shape-lr` | 50.0 | 50.0 | 56.8 | 50.0 | 51.3 | - |
 
 `wild-ssh`: SSH/Telnet honeypots (shell commands typed after login): shell21, shell24, copot_ssh, tpot25.
 `wild-web`: Web honeypots and exposed servers (request parameters): copot_web, finch, vps.
 `curated`: Curated payload lists (attack strings only): patt.
 
-**Same strings, container changed (`lr-raw`, first seed, distinct, %, mean over training sources)**
+**Is the control class a fair negative?**
+
+| source | control strings | with shell or SQL metacharacters (%) | blocked by CRS level 1 (%) |
+|---|---|---|---|
+| copot_ssh | 20000 | 0.2 | 0.1 |
+| tpot25 | 2081 | 0.0 | 0.1 |
+| vps | 20000 | 0.0 | 0.0 |
+
+Metacharacters: quote, backtick, semicolon, pipe, ampersand, dollar, angle brackets, parentheses, braces, square brackets, backslash.
+
+**Same strings, container changed (`lr-raw`, distinct, %, mean over training sources and seeds)**
 
 | source | class | as observed | as bare | as kv | as json |
 |---|---|---|---|---|---|
-| patt | attack class | 62.4 | 62.4 (1/8) | 59.8 (7/8) | 74.9 (7/8) |
-| shell21 | attack class | 66.1 | 66.1 (0/8) | 66.4 (6/8) | 69.4 (4/8) |
-| shell24 | attack class | 72.1 | 72.1 (0/8) | 71.9 (5/8) | 77.3 (5/8) |
-| copot_ssh | attack class | 62.3 | 62.3 (0/8) | 64.5 (3/8) | 72.8 (2/8) |
-| copot_ssh | control | 37.5 | 37.5 (0/8) | 48.2 (6/8) | 73.4 (6/8) |
-| tpot25 | attack class | 67.8 | 67.8 (0/8) | 65.9 (6/8) | 69.0 (3/8) |
-| tpot25 | control | 37.3 | 37.3 (0/8) | 48.1 (5/8) | 73.6 (5/8) |
-| copot_web | attack class | 62.7 | 60.7 (6/8) | 62.7 (5/8) | 76.1 (6/8) |
-| finch | attack class | 49.3 | 38.4 (5/8) | 51.7 (4/8) | 70.4 (4/8) |
-| vps | attack class | 45.4 | 37.1 (6/8) | 45.4 (3/8) | 72.5 (6/8) |
-| vps | control | 37.5 | 37.5 (0/8) | 48.5 (6/8) | 73.5 (6/8) |
+| patt | attack class | 62.7 | 62.7 (1/8) | 59.6 (7/8) | 75.8 (7/8) |
+| shell21 | attack class | 65.4 | 65.4 (0/8) | 68.7 (5/8) | 72.6 (4/8) |
+| shell24 | attack class | 70.6 | 70.6 (0/8) | 72.7 (5/8) | 75.9 (4/8) |
+| copot_ssh | attack class | 59.5 | 59.5 (0/8) | 62.5 (3/8) | 71.6 (2/8) |
+| copot_ssh | control | 37.5 | 37.5 (0/8) | 46.7 (6/8) | 75.0 (6/8) |
+| tpot25 | attack class | 65.9 | 65.9 (0/8) | 68.5 (5/8) | 72.2 (3/8) |
+| tpot25 | control | 37.4 | 37.4 (0/8) | 46.2 (5/8) | 75.0 (5/8) |
+| copot_web | attack class | 63.6 | 61.3 (6/8) | 63.5 (5/8) | 77.2 (6/8) |
+| finch | attack class | 48.2 | 37.4 (4/8) | 50.4 (4/8) | 69.8 (4/8) |
+| vps | attack class | 46.3 | 37.2 (6/8) | 46.2 (2/8) | 73.4 (6/8) |
+| vps | control | 37.5 | 37.5 (0/8) | 46.8 (6/8) | 75.1 (5/8) |
 
-In brackets: training sources for which the change is significant (Holm-adjusted exact McNemar p < 0.05).
+In brackets: training sources for which the change is significant in every seed (Holm-adjusted exact McNemar p < 0.05).
 
 ## 7. Remedies compared with plain canonicalization
 
@@ -621,6 +681,22 @@ Unit of analysis: the training source (n = 8). Each value is that source's mean 
 | `gbm-cstrip` | container removed | 69.1 | 64.6 | -4.5 [-13.9, +4.5] | - | 0.461 |  |
 | `mlp-cstrip` | container removed | 66.3 | 59.9 | -6.4 [-11.2, +0.6] | - | 0.195 |  |
 
+**Provenance groups as the unit** (each group's mean difference over its member training sources; groups: paper1x; hpd + csic + gran; ecml; fwaf; modsec; crs)
+
+| metric | configuration | difference vs lr-canon, points [95% bootstrap] | better | p | p (Holm, all rows) |
+|---|---|---|---|---|---|
+| FPR, other benchmark sources | `lr-canon+aug` | -10.7 [-18.1, -3.9] | 5/6 | 0.062 | 0.500 |
+| FPR, other benchmark sources | `lr-cstrip` | -18.5 [-30.5, -7.0] | 5/6 | 0.062 | 0.500 |
+| FPR, other benchmark sources | `lr-vmil` | -18.8 [-33.2, -5.1] | 6/6 | 0.031 | 0.281 |
+| attacks flagged, other benchmark sources | `lr-canon+aug` | -0.4 [-9.9, +7.8] | 3/6 | 1.000 | 1.000 |
+| attacks flagged, other benchmark sources | `lr-cstrip` | -0.7 [-11.3, +9.5] | 3/6 | 1.000 | 1.000 |
+| attacks flagged, other benchmark sources | `lr-vmil` | -5.0 [-16.7, +6.8] | 2/6 | 0.562 | 1.000 |
+| balanced accuracy, other benchmark sources | `lr-canon+aug` | +5.2 [+1.6, +9.1] | 5/6 | 0.062 | 0.500 |
+| balanced accuracy, other benchmark sources | `lr-cstrip` | +8.9 [+4.0, +13.0] | 5/6 | 0.062 | 0.500 |
+| balanced accuracy, other benchmark sources | `lr-vmil` | +6.9 [+0.7, +12.7] | 4/6 | 0.156 | 0.625 |
+
+With 6 units the smallest attainable two-sided p is 0.031.
+
 **`lr-cstrip` against `lr-canon`: FPR on the other benchmark sources, per seed**
 
 | seed | canon | cstrip | cells with lower FPR | cells with higher FPR |
@@ -631,47 +707,47 @@ Unit of analysis: the training source (n = 8). Each value is that source's mean 
 
 ## 8. Container change as an evasion vector
 
-Attack strings of each test split, re-sent with only the container changed (first seed). `missed` counts attacks that were flagged as collected and are no longer flagged. `significant drops` counts train/test cells where detection falls (Holm-adjusted exact McNemar p < 0.05 within the configuration).
+Attack strings of each test split, re-sent with only the container changed (3 seed(s), rates averaged). `missed` counts attacks that were flagged as collected and are no longer flagged (mean over seeds). `significant drops` counts train/test cells where detection falls in every seed (Holm-adjusted exact McNemar p < 0.05 within each seed and configuration); `per seed` gives the count in each seed. The rewrite keeps the payload's characters; whether the attack would still work against a real application is not tested, so a drop measures how sensitive the prediction is to the representation.
 
 **Own source (in-distribution)**
 
-| config | attack strings | flagged as collected (%) | as kv (%) | missed (kv) | largest drop, points (kv) | as json (%) | missed (json) | largest drop, points (json) | significant drops (kv , json) |
-|---|---|---|---|---|---|---|---|---|---|
-| `gbm-canon` | 20354 | 94.1 | 89.7 | 129 | -36.1 (paper1x) | 86.4 | 4438 | -84.8 (modsec) | 1/8 , 2/8 |
-| `gbm-cstrip` | 20354 | 91.6 | 91.7 | 13 | -0.1 (gran) | 91.7 | 6 | +0.0 (paper1x) | 0/8 , 0/8 |
-| `gbm-raw` | 20354 | 95.2 | 90.8 | 130 | -36.8 (paper1x) | 85.1 | 5104 | -100.0 (modsec) | 1/8 , 1/8 |
-| `lr-canon` | 20354 | 95.8 | 94.6 | 71 | -6.9 (crs) | 99.2 | 174 | -3.4 (modsec) | 2/8 , 1/8 |
-| `lr-canon+aug` | 20354 | 95.3 | 95.5 | 33 | -0.5 (hpd) | 95.9 | 46 | -0.4 (hpd) | 1/8 , 0/8 |
-| `lr-cstrip` | 20354 | 93.3 | 93.3 | 13 | -0.3 (gran) | 93.3 | 0 | +0.0 (paper1x) | 0/8 , 0/8 |
-| `lr-raw` | 20354 | 96.9 | 95.8 | 70 | -6.8 (crs) | 99.2 | 54 | -0.9 (modsec) | 2/8 , 1/8 |
-| `lr-raw+aug` | 20354 | 96.4 | 96.7 | 34 | -0.5 (hpd) | 96.7 | 60 | -0.5 (gran) | 1/8 , 1/8 |
-| `lr-vmil` | 20354 | 92.3 | 92.2 | 39 | -0.5 (fwaf) | 92.2 | 33 | -0.5 (fwaf) | 1/8 , 1/8 |
-| `mlp-canon` | 20354 | 95.3 | 94.6 | 58 | -5.0 (crs) | 97.9 | 353 | -6.6 (modsec) | 1/8 , 1/8 |
-| `mlp-cstrip` | 20354 | 93.6 | 93.5 | 22 | -0.6 (gran) | 93.6 | 12 | +0.0 (paper1x) | 0/8 , 0/8 |
-| `mlp-raw` | 20354 | 96.6 | 95.1 | 90 | -8.6 (paper1x) | 97.7 | 114 | -3.5 (crs) | 2/8 , 1/8 |
-| `rf-canon` | 20354 | 94.2 | 92.4 | 69 | -15.0 (paper1x) | 96.6 | 429 | -7.5 (modsec) | 2/8 , 2/8 |
-| `rf-cstrip` | 20354 | 92.5 | 92.5 | 6 | -0.1 (gran) | 92.5 | 1 | +0.0 (paper1x) | 0/8 , 0/8 |
-| `rf-raw` | 20354 | 96.1 | 94.1 | 99 | -13.9 (paper1x) | 98.6 | 100 | -0.8 (modsec) | 2/8 , 1/8 |
+| config | attack strings | flagged as collected (%) | as kv (%) | missed (kv) | largest drop, points (kv) | as json (%) | missed (json) | largest drop, points (json) | significant drops (kv , json) | per seed (kv , json) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `gbm-canon` | 20354 | 95.7 | 90.8 | 144 | -37.0 (paper1x) | 88.8 | 3794 | -72.9 (modsec) | 1/8 , 2/8 | 1 / 2 / 3 , 2 / 2 / 2 |
+| `gbm-cstrip` | 20354 | 92.6 | 92.6 | 15 | -0.1 (gran) | 92.6 | 8 | +0.0 (paper1x) | 0/8 , 0/8 | 0 / 0 / 0 , 0 / 0 / 0 |
+| `gbm-raw` | 20354 | 96.5 | 91.9 | 125 | -36.8 (paper1x) | 88.5 | 4083 | -81.2 (modsec) | 1/8 , 1/8 | 1 / 2 / 2 , 1 / 1 / 2 |
+| `lr-canon` | 20354 | 96.6 | 95.6 | 54 | -6.8 (paper1x) | 99.4 | 167 | -3.3 (modsec) | 2/8 , 1/8 | 2 / 2 / 2 , 1 / 1 / 1 |
+| `lr-canon+aug` | 20354 | 96.2 | 96.4 | 23 | -0.3 (hpd) | 96.4 | 50 | -0.3 (hpd) | 0/8 , 0/8 | 1 / 0 / 0 , 0 / 0 / 0 |
+| `lr-cstrip` | 20354 | 93.9 | 93.9 | 12 | -0.3 (gran) | 93.9 | 0 | +0.0 (paper1x) | 0/8 , 0/8 | 0 / 0 / 0 , 0 / 0 / 0 |
+| `lr-raw` | 20354 | 97.1 | 96.3 | 47 | -6.4 (paper1x) | 99.5 | 49 | -0.8 (modsec) | 2/8 , 1/8 | 2 / 2 / 2 , 1 / 1 / 1 |
+| `lr-raw+aug` | 20354 | 96.8 | 97.0 | 21 | -0.3 (hpd) | 96.9 | 46 | -0.3 (hpd) | 0/8 , 0/8 | 1 / 0 / 0 , 1 / 0 / 0 |
+| `lr-vmil` | 20354 | 92.8 | 92.8 | 36 | -0.4 (fwaf) | 92.8 | 26 | -0.4 (fwaf) | 0/8 , 0/8 | 1 / 1 / 0 , 1 / 1 / 0 |
+| `mlp-canon` | 20354 | 96.1 | 95.7 | 41 | -4.1 (paper1x) | 98.6 | 325 | -6.4 (modsec) | 0/8 , 1/8 | 1 / 2 / 0 , 1 / 1 / 1 |
+| `mlp-cstrip` | 20354 | 93.8 | 93.7 | 16 | -0.4 (crs) | 93.8 | 10 | +0.0 (paper1x) | 0/8 , 0/8 | 0 / 0 / 0 , 0 / 0 / 0 |
+| `mlp-raw` | 20354 | 96.9 | 96.2 | 49 | -5.3 (paper1x) | 98.7 | 95 | -1.4 (modsec) | 0/8 , 1/8 | 2 / 1 / 0 , 1 / 1 / 1 |
+| `rf-canon` | 20354 | 95.8 | 94.3 | 59 | -12.4 (paper1x) | 98.3 | 271 | -4.6 (modsec) | 2/8 , 1/8 | 2 / 2 / 2 , 2 / 1 / 2 |
+| `rf-cstrip` | 20354 | 93.6 | 93.5 | 9 | -0.2 (crs) | 93.6 | 2 | +0.0 (paper1x) | 0/8 , 0/8 | 0 / 0 / 0 , 0 / 0 / 0 |
+| `rf-raw` | 20354 | 96.5 | 94.9 | 74 | -13.0 (paper1x) | 99.1 | 71 | -0.5 (modsec) | 1/8 , 1/8 | 2 / 2 / 1 , 1 / 1 / 1 |
 
 **Other benchmark sources**
 
-| config | attack strings | flagged as collected (%) | as kv (%) | missed (kv) | largest drop, points (kv) | as json (%) | missed (json) | largest drop, points (json) | significant drops (kv , json) |
-|---|---|---|---|---|---|---|---|---|---|
-| `gbm-canon` | 141420 | 71.7 | 72.0 | 3070 | -27.8 (paper1x -> fwaf) | 76.8 | 2372 | -25.3 (hpd -> csic) | 10/56 , 7/56 |
-| `gbm-cstrip` | 141420 | 79.0 | 79.5 | 116 | -0.7 (crs -> gran) | 79.2 | 66 | -0.4 (modsec -> fwaf) | 0/56 , 1/56 |
-| `gbm-raw` | 141420 | 67.5 | 68.4 | 2933 | -27.2 (paper1x -> fwaf) | 73.6 | 2620 | -25.3 (crs -> csic) | 8/56 , 7/56 |
-| `lr-canon` | 141420 | 79.1 | 78.2 | 3961 | -23.4 (paper1x -> fwaf) | 86.5 | 3453 | -40.6 (modsec -> gran) | 19/56 , 9/56 |
-| `lr-canon+aug` | 141420 | 77.9 | 77.1 | 1645 | -16.9 (modsec -> paper1x) | 72.7 | 7200 | -50.7 (gran -> csic) | 12/56 , 28/56 |
-| `lr-cstrip` | 141420 | 77.4 | 77.8 | 226 | -0.7 (modsec -> crs) | 77.6 | 58 | -0.0 (ecml -> fwaf) | 0/56 , 0/56 |
-| `lr-raw` | 141420 | 65.9 | 65.1 | 4108 | -22.6 (paper1x -> fwaf) | 74.7 | 2624 | -49.4 (gran -> csic) | 15/56 , 8/56 |
-| `lr-raw+aug` | 141420 | 64.5 | 64.2 | 1498 | -13.7 (ecml -> hpd) | 60.4 | 7072 | -66.3 (gran -> csic) | 15/56 , 28/56 |
-| `lr-vmil` | 141420 | 73.1 | 73.7 | 575 | -2.3 (modsec -> fwaf) | 73.3 | 493 | -2.5 (modsec -> fwaf) | 4/56 , 3/56 |
-| `mlp-canon` | 141420 | 79.4 | 78.6 | 3276 | -15.7 (paper1x -> fwaf) | 86.0 | 3726 | -42.9 (modsec -> gran) | 17/56 , 12/56 |
-| `mlp-cstrip` | 141420 | 77.4 | 77.6 | 314 | -1.5 (crs -> paper1x) | 77.5 | 82 | -0.5 (crs -> fwaf) | 2/56 , 0/56 |
-| `mlp-raw` | 141420 | 66.5 | 64.9 | 4568 | -31.1 (paper1x -> fwaf) | 75.5 | 3537 | -30.9 (modsec -> hpd) | 20/56 , 14/56 |
-| `rf-canon` | 141420 | 75.0 | 75.5 | 2692 | -33.8 (crs -> paper1x) | 79.2 | 1917 | -8.3 (modsec -> paper1x) | 9/56 , 11/56 |
-| `rf-cstrip` | 141420 | 78.8 | 79.5 | 65 | -0.2 (crs -> fwaf) | 79.1 | 31 | -0.4 (crs -> fwaf) | 0/56 , 0/56 |
-| `rf-raw` | 141420 | 67.2 | 67.6 | 2571 | -39.5 (crs -> paper1x) | 73.9 | 1866 | -12.4 (hpd -> modsec) | 8/56 , 5/56 |
+| config | attack strings | flagged as collected (%) | as kv (%) | missed (kv) | largest drop, points (kv) | as json (%) | missed (json) | largest drop, points (json) | significant drops (kv , json) | per seed (kv , json) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `gbm-canon` | 141420 | 71.4 | 71.5 | 3326 | -27.6 (paper1x -> fwaf) | 77.7 | 2222 | -4.9 (hpd -> csic) | 7/56 , 4/56 | 10 / 9 / 7 , 7 / 10 / 3 |
+| `gbm-cstrip` | 141420 | 78.5 | 78.9 | 188 | -0.6 (crs -> ecml) | 78.6 | 97 | -0.5 (modsec -> fwaf) | 0/56 , 1/56 | 0 / 0 / 1 , 1 / 1 / 1 |
+| `gbm-raw` | 141420 | 67.3 | 67.9 | 2904 | -27.2 (paper1x -> fwaf) | 73.5 | 3036 | -26.4 (gran -> csic) | 6/56 , 5/56 | 8 / 9 / 7 , 7 / 6 / 7 |
+| `lr-canon` | 141420 | 79.2 | 78.3 | 3863 | -23.8 (paper1x -> fwaf) | 87.8 | 3191 | -40.4 (modsec -> gran) | 17/56 , 8/56 | 19 / 19 / 19 , 9 / 8 / 9 |
+| `lr-canon+aug` | 141420 | 78.5 | 77.5 | 1679 | -17.4 (modsec -> paper1x) | 72.5 | 8108 | -57.4 (gran -> csic) | 10/56 , 26/56 | 12 / 14 / 14 , 28 / 28 / 28 |
+| `lr-cstrip` | 141420 | 76.6 | 76.9 | 156 | -0.3 (modsec -> crs) | 76.8 | 38 | +0.0 (paper1x -> hpd) | 0/56 , 0/56 | 0 / 0 / 0 , 0 / 0 / 0 |
+| `lr-raw` | 141420 | 67.0 | 66.3 | 4116 | -23.3 (paper1x -> fwaf) | 76.9 | 2331 | -43.6 (gran -> csic) | 14/56 , 6/56 | 15 / 16 / 17 , 8 / 7 / 9 |
+| `lr-raw+aug` | 141420 | 66.5 | 65.8 | 1594 | -14.4 (modsec -> paper1x) | 61.1 | 8255 | -60.5 (gran -> csic) | 11/56 , 25/56 | 15 / 14 / 13 , 28 / 29 / 29 |
+| `lr-vmil` | 141420 | 72.1 | 72.5 | 563 | -2.1 (crs -> fwaf) | 72.2 | 495 | -2.2 (ecml -> fwaf) | 2/56 , 3/56 | 4 / 3 / 3 , 3 / 4 / 4 |
+| `mlp-canon` | 141420 | 79.0 | 78.3 | 3267 | -16.0 (paper1x -> fwaf) | 86.8 | 3535 | -46.1 (modsec -> gran) | 13/56 , 8/56 | 17 / 16 / 16 , 12 / 9 / 8 |
+| `mlp-cstrip` | 141420 | 76.4 | 76.7 | 212 | -0.6 (crs -> paper1x) | 76.6 | 76 | +0.0 (paper1x -> hpd) | 0/56 , 0/56 | 2 / 0 / 0 , 0 / 0 / 0 |
+| `mlp-raw` | 141420 | 68.2 | 66.9 | 4052 | -22.7 (paper1x -> fwaf) | 77.9 | 2930 | -31.7 (modsec -> hpd) | 19/56 , 9/56 | 20 / 19 / 20 , 14 / 9 / 9 |
+| `rf-canon` | 141420 | 75.1 | 75.6 | 2531 | -29.7 (crs -> paper1x) | 80.2 | 1739 | -10.3 (modsec -> paper1x) | 8/56 , 4/56 | 9 / 9 / 9 , 11 / 5 / 6 |
+| `rf-cstrip` | 141420 | 78.3 | 78.9 | 52 | -0.1 (ecml -> paper1x) | 78.6 | 25 | +0.0 (paper1x -> hpd) | 0/56 , 0/56 | 0 / 0 / 0 , 0 / 0 / 0 |
+| `rf-raw` | 141420 | 66.6 | 66.7 | 2899 | -35.3 (crs -> paper1x) | 76.0 | 1070 | -4.0 (ecml -> modsec) | 8/56 , 1/56 | 8 / 10 / 10 , 5 / 1 / 3 |
 
-A drop means the detector can be evaded by repackaging alone. A rise means it was reacting to the container rather than to the payload.
+A drop means the prediction can be changed by repackaging alone. A rise means the detector was reacting to the container as well as to the payload.
 

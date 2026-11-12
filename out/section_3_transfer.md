@@ -100,6 +100,7 @@ Headline configuration: `lr-raw`. Rows are the training source, columns the test
 | `mlp-cstrip` | 10.9 | 29.1 | 93.8 | 76.4 | 91.4 | 73.7 | 23.0 | 76.0 |
 | `crs-pl1` | 5.9 | 5.9 | 75.2 | 75.4 | 84.7 | 84.8 | 5.9 | 75.4 |
 | `crs-pl2` | 19.8 | 19.8 | 86.9 | 87.0 | 83.6 | 83.6 | 19.8 | 87.0 |
+| `shape-lr` | 15.5 | 55.2 | 44.6 | 54.5 | 64.6 | 49.7 | 55.2 | 54.5 |
 
 "Abstain" lets an input through when it shares no feature with the model's vocabulary, instead of deciding from the intercept or prior.
 
@@ -131,3 +132,51 @@ Headline configuration: `lr-raw`. Rows are the training source, columns the test
 | `mlp-raw` | 42.8 [20.7, 65.8] | 32.6 [12.2, 53.2] | 62.7 [58.1, 67.2] | -30.6 [-37.5, -21.7] |
 | `crs-pl1` | 5.9 [5.2, 6.4] | - | 84.8 [83.6, 86.1] | - |
 | `crs-pl2` | 19.8 [17.8, 21.6] | - | 83.6 [82.4, 84.9] | - |
+| `shape-lr` | 55.2 [32.3, 76.0] | 39.7 [7.1, 69.7] | 49.7 [44.9, 54.6] | -14.9 [-30.7, -0.4] |
+
+**Overlap after the container is removed.** Share of test strings whose container-free, canonicalized form also occurs in the training split: 3.3% on the own source (mean; largest 9.6%), 0.4% on other sources (mean; largest 7.5%, modsec -> paper1x). Without those strings, `lr-raw` flags 47.2% of benign and 67.0% of attack strings on other sources (all strings: 47.2% and 67.0%).
+
+**Robustness: cross-dataset means with dependent or special sources left out** (a source left out is neither trained on nor tested on; for a provenance group the range over the choice of member is shown)
+
+| config | FPR (all benchmark sources, 8 sources) | bal.acc (all benchmark sources) | FPR (one of hpd / csic / gran at a time, 6 sources) | bal.acc (one of hpd / csic / gran at a time) | FPR (without crs, 7 sources) | bal.acc (without crs) |
+|---|---|---|---|---|---|---|
+| `lr-raw` | 47.2 | 59.9 | 37.9-44.4 | 58.1-62.2 | 46.1 | 60.0 |
+| `lr-canon` | 49.7 | 64.8 | 44.5-48.8 | 61.3-67.2 | 48.5 | 65.6 |
+| `lr-cstrip` | 28.8 | 73.9 | 26.1-40.1 | 66.4-76.1 | 25.9 | 75.2 |
+| `lr-vmil` | 24.4 | 73.8 | 29.1-36.6 | 64.7-72.1 | 20.1 | 75.9 |
+| `svm-vmil` | 25.7 | 73.9 | 30.3-37.3 | 64.8-72.3 | 20.8 | 76.0 |
+| `crs-pl1` | 5.9 | 84.8 | 4.8-7.8 | 80.6-87.7 | 4.8 | 85.5 |
+| `shape-lr` | 55.2 | 49.7 | 39.2-52.0 | 49.8-54.1 | 54.7 | 47.8 |
+
+**Ranking quality and detection at a fixed false-positive rate** (threshold set on each cell's own benign strings so that at most 1% or 5% are flagged; a best-case operating point that puts every detector at the same FPR; mean over cells)
+
+| config | AUC own | AUC other | det @1% FPR own | det @1% FPR other | det @5% FPR own | det @5% FPR other |
+|---|---|---|---|---|---|---|
+| `lr-raw` | 96.8 | 68.3 | 84.4 | 28.3 | 88.7 | 40.9 |
+| `lr-raw+aug` | 96.7 | 69.7 | 85.3 | 29.7 | 88.6 | 42.5 |
+| `lr-canon` | 95.6 | 78.4 | 81.3 | 39.3 | 85.7 | 54.5 |
+| `lr-canon+aug` | 95.6 | 79.5 | 81.4 | 43.0 | 86.6 | 56.5 |
+| `lr-cstrip` | 93.4 | 83.1 | 77.9 | 43.8 | 82.3 | 59.6 |
+| `lr-vmil` | 93.4 | 83.2 | 77.1 | 40.6 | 81.5 | 53.6 |
+| `mnb-raw` | 93.5 | 71.2 | 77.3 | 32.5 | 79.4 | 44.0 |
+| `mnb-raw+aug` | 94.1 | 74.6 | 78.0 | 35.9 | 82.5 | 47.4 |
+| `mnb-canon` | 93.4 | 80.5 | 77.4 | 47.7 | 79.6 | 58.2 |
+| `mnb-canon+aug` | 93.9 | 83.1 | 77.9 | 52.6 | 81.2 | 63.1 |
+| `mnb-cstrip` | 91.8 | 81.6 | 76.0 | 49.5 | 77.6 | 60.8 |
+| `mnb-vmil` | 91.6 | 81.9 | 76.5 | 49.8 | 77.8 | 59.6 |
+| `svm-raw` | 97.1 | 69.3 | 85.2 | 28.5 | 89.4 | 41.0 |
+| `svm-raw+aug` | 96.9 | 69.1 | 85.1 | 28.1 | 88.4 | 41.2 |
+| `svm-canon` | 96.0 | 78.8 | 82.3 | 39.6 | 85.9 | 54.4 |
+| `svm-canon+aug` | 95.9 | 79.2 | 82.2 | 40.3 | 86.6 | 54.9 |
+| `svm-cstrip` | 93.7 | 83.4 | 78.0 | 42.8 | 82.9 | 59.3 |
+| `svm-vmil` | 93.9 | 83.1 | 78.7 | 39.5 | 83.0 | 53.6 |
+| `rf-raw` | 95.1 | 63.3 | 78.9 | 18.8 | 83.0 | 28.1 |
+| `rf-canon` | 93.9 | 71.0 | 75.5 | 29.2 | 79.3 | 41.5 |
+| `rf-cstrip` | 92.6 | 74.9 | 68.5 | 33.7 | 73.6 | 44.5 |
+| `gbm-raw` | 96.9 | 65.8 | 87.4 | 24.9 | 90.1 | 35.7 |
+| `gbm-canon` | 95.7 | 73.9 | 83.6 | 34.1 | 88.3 | 45.7 |
+| `gbm-cstrip` | 92.3 | 79.8 | 77.8 | 39.1 | 82.5 | 53.3 |
+| `mlp-raw` | 96.1 | 74.3 | 84.9 | 35.0 | 87.5 | 47.8 |
+| `mlp-canon` | 95.3 | 82.4 | 82.2 | 49.3 | 86.0 | 61.9 |
+| `mlp-cstrip` | 93.7 | 84.3 | 79.9 | 51.1 | 83.8 | 63.5 |
+| `shape-lr` | 65.7 | 47.9 | 14.2 | 4.4 | 16.2 | 5.3 |
