@@ -305,6 +305,14 @@ class ValueSpace:
         return clf
 
     @staticmethod
+    def scores(clf, X, owner, n):
+        """Attack score per string: the highest score among its values."""
+        s = attack_score(clf, X)
+        out = np.full(n, -np.inf)
+        np.maximum.at(out, owner, s)
+        return out
+
+    @staticmethod
     def flags(clf, X, owner, n):
         """(flagged, has_known_feature) per string from per-value decisions."""
         vflag = np.asarray(clf.predict(X), dtype=object) != "benign"
@@ -342,6 +350,8 @@ def detector_grid(cfg: dict):
                 grid.append((kind, prep, False))
     if "crs" in cfg["detectors"]:
         grid += [("crs", "pl1", False), ("crs", "pl2", False)]
+    if cfg.get("shape_baseline", False):
+        grid.append(("shape", "lr", False))
     return grid
 
 
