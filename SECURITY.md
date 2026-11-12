@@ -23,4 +23,4 @@ Examples of what to report:
 
 shapetrap works with attack payloads on purpose. SQL injection, XSS, command injection, and path traversal strings in the datasets, in `out/`, or in the report are expected and are not a security issue. shapetrap only classifies these strings and passes them to libmodsecurity in memory; it never sends them over the network.
 
-A detector in shapetrap that misses an attack or flags a benign input is a measurement, not a vulnerability. Open a normal issue if you think a result is wrong.
+When a detector in shapetrap misses an attack or flags a benign input, that is part of what the tool measures. Open a normal issue if you think a result is wrong.
