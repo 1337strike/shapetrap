@@ -177,7 +177,7 @@ Seeds, the cap per class, the tokenizer, the number of features, and the list of
 
 ## Example results
 
-The `out/` folder in this repository holds a complete run of version 0.6.0 with the default configuration: seeds 42, 43, 44; 31 detector configurations; Python 3.12.10, scikit-learn 1.9.1, NumPy 2.5.4, SciPy 1.18.1, LightGBM 4.7.0, libmodsecurity 3.0.17, CRS at commit `e587261`.
+The `out/` folder in this repository holds a complete run of version 0.6.0 with the default configuration (0.6.1 has the same code and adds these results): seeds 42, 43, 44; 31 detector configurations; Python 3.12.10, scikit-learn 1.9.1, NumPy 2.5.4, SciPy 1.18.1, LightGBM 4.7.0, libmodsecurity 3.0.17, CRS at commit `e587261`.
 
 **Performance collapses across datasets.** Logistic regression on raw input, mean over the eight benchmark sources:
 
@@ -220,7 +220,7 @@ Compared with `canon`, `cstrip` lowers the cross-dataset FPR by 20.8 points (bet
 
 With the provenance group as the unit (six groups), `cstrip` still lowers the FPR by 18.5 points [−30.5, −7.0], but the test is not significant (p = 0.062 unadjusted, 0.50 after Holm). At a threshold that flags 5% of each cell's benign inputs, `cstrip` detects 59.6% of cross-dataset attacks, against 54.5% for `canon` and 40.9% for `raw`.
 
-**The real CRS beats every learned detector in this configuration.** Its balanced accuracy ranges from 56.6% (`csic`) to 99.3% (`hpd`) depending on the test source, and without `crs` (its own regression tests) it is 85.5% against 76.0% for the best learned detector.
+**The real CRS beats every learned detector in this configuration.** Its balanced accuracy ranges from 56.6% (`csic`) to 99.2% (`hpd`) depending on the test source (mean over training sources), and without `crs` (its own regression tests) it is 85.5% against 76.0% for the best learned detector.
 
 | Detector | FPR | Attacks flagged | Balanced accuracy |
 |---|---|---|---|
