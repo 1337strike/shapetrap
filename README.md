@@ -177,7 +177,7 @@ Seeds, the cap per class, the tokenizer, the number of features, and the list of
 
 ## Example results
 
-The `out/` folder in this repository holds a complete run of version 0.5.1 with the default configuration: seeds 42, 43, 44; 31 detector configurations; Python 3.12.10, scikit-learn 1.9.1, NumPy 2.5.4, SciPy 1.18.1, LightGBM 4.7.0, libmodsecurity 3.0.17, CRS at commit `e587261`.
+The `out/` folder in this repository holds a complete run of version 0.6.0 with the default configuration: seeds 42, 43, 44; 31 detector configurations; Python 3.12.10, scikit-learn 1.9.1, NumPy 2.5.4, SciPy 1.18.1, LightGBM 4.7.0, libmodsecurity 3.0.17, CRS at commit `e587261`.
 
 **Performance collapses across datasets.** Logistic regression on raw input, mean over the eight benchmark sources:
 
@@ -198,7 +198,9 @@ All six learners behave the same way:
 | LightGBM | 8.3% | 55.4% | 47.1 [22.0, 70.7] |
 | MLP | 10.2% | 42.8% | 32.6 [12.2, 53.2] |
 
-**Changing only the container flips decisions.** On each model's own test split: benign `paper1x` inputs are flagged 0.0% as collected, 33.6% with keys removed, and 100.0% as JSON. Benign `hpd` inputs go from 0.0% to 42.4% when wrapped as `key=value`, and benign `fwaf` inputs from 0.5% to 87.5%. Of 264 benign cells, 132 change significantly.
+**Changing only the container flips decisions.** On each model's own test split, mean of three seeds: benign `paper1x` inputs are flagged 0.0% as collected, 37.0% with keys removed, and 100.0% as JSON. Benign `hpd` inputs go from 0.0% to 49.9% when wrapped as `key=value`, and benign `fwaf` inputs from 0.7% to 80.0% as `key=value` and 100.0% as JSON. Of 264 benign cells, 126 change significantly in every seed.
+
+**The shape alone separates some benchmarks.** `shape-lr` sees only the container type and the number of `key=value` pairs. It reaches a balanced accuracy of 99.9% on `paper1x` and 95.5% on `modsec`, but is near chance on the other sources and across sources (49.7%).
 
 **The `=` token changes sign between sources.** It is evidence for *benign* in five sources (`paper1x`, `csic`, `ecml`, `modsec`, `crs`) and evidence for an *attack* in three (`hpd`, `gran`, `fwaf`). In total 164 features flip sign.
 
@@ -214,9 +216,11 @@ All six learners behave the same way:
 | `cstrip` | 28.8% | 76.6% | 73.9% |
 | `vmil` | 24.4% | 72.1% | 73.8% |
 
-Compared with `canon`, `cstrip` lowers the cross-dataset FPR by 20.8 points (better on 7 of 8 training sources) and `vmil` by 25.2 points (8 of 8). The number of benign decisions that change when an input is wrapped as JSON drops from 20,090 to 51 out of 27,763. A gap remains: the cross-dataset FPR is still 24–29%.
+Compared with `canon`, `cstrip` lowers the cross-dataset FPR by 20.8 points (better on 7 of 8 training sources) and `vmil` by 25.2 points (8 of 8). The number of benign decisions that change when an input is wrapped as JSON drops from 19,692 to 39 out of 27,763. A gap remains: the cross-dataset FPR is still 24–29%.
 
-**The real CRS beats every learned detector under this protocol.**
+With the provenance group as the unit (six groups), `cstrip` still lowers the FPR by 18.5 points [−30.5, −7.0], but the test is not significant (p = 0.062 unadjusted, 0.50 after Holm). At a threshold that flags 5% of each cell's benign inputs, `cstrip` detects 59.6% of cross-dataset attacks, against 54.5% for `canon` and 40.9% for `raw`.
+
+**The real CRS beats every learned detector in this configuration.** Its balanced accuracy ranges from 56.6% (`csic`) to 99.3% (`hpd`) depending on the test source, and without `crs` (its own regression tests) it is 85.5% against 76.0% for the best learned detector.
 
 | Detector | FPR | Attacks flagged | Balanced accuracy |
 |---|---|---|---|
@@ -225,7 +229,7 @@ Compared with `canon`, `cstrip` lowers the cross-dataset FPR by 20.8 points (bet
 | Best learned detector, cross-dataset (`svm-vmil`) | 25.7% | 73.4% | 73.9% |
 | `lr-raw`, in-distribution | 8.6% | 97.1% | 94.2% |
 
-**Repackaging changes attack decisions.** With the payload unchanged, detection of `lr-raw` drops significantly in 15 of 56 cross-dataset cells when the payload is wrapped as `key=value` and in 8 of 56 as JSON (largest drop 49.4 points). Shape augmentation makes this worse for JSON (28 of 56 cells). With `cstrip`, no cell drops significantly for logistic regression.
+**Repackaging changes attack decisions.** With the payload unchanged, detection of `lr-raw` drops significantly in every seed in 14 of 56 cross-dataset cells when the payload is wrapped as `key=value` and in 6 of 56 as JSON (largest drop 43.6 points). Shape augmentation makes this worse for JSON (25 of 56 cells). With `cstrip`, no cell drops significantly for logistic regression; that is expected, since the rewrites only change what `cstrip` removes.
 
 **On honeypot data the outcome depends on the training source, not on the input.** Share of distinct inputs flagged by `lr-raw`:
 
