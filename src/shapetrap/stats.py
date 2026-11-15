@@ -133,15 +133,17 @@ def wilcoxon_exact(diffs: list[float]) -> tuple[float, float, int]:
         w = sum(r for r, sgn in zip(ranks, signs) if sgn)
         if abs(w - centre) >= observed - 1e-12:
             hits += 1
-    return (w_plus, hits / 2 ** n, n)
+    return (w_plus, hits / 2**n, n)
 
 
-def bootstrap_mean(values: list[float], n_boot: int = 10000, seed: int = 0,
-                   level: float = 0.95) -> tuple[float, float, float]:
+def bootstrap_mean(
+    values: list[float], n_boot: int = 10000, seed: int = 0, level: float = 0.95
+) -> tuple[float, float, float]:
     """Mean with a percentile bootstrap interval, resampling the units (here:
     training sources) with replacement.  With a handful of units the interval
     is coarse; it shows how much one source can move the mean."""
     import numpy as np
+
     vals = np.asarray([v for v in values if v is not None and not math.isnan(v)], dtype=float)
     if len(vals) == 0:
         return (float("nan"),) * 3

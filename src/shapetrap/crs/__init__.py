@@ -72,11 +72,17 @@ def compile_harness(work: Path) -> Path:
     cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     if cc is None:
         raise RuntimeError("no C compiler found (install gcc)")
-    proc = subprocess.run([cc, "-O2", "-o", str(binary), str(HARNESS_SOURCE), "-lmodsecurity"],
-                          capture_output=True, text=True)
+    proc = subprocess.run(
+        [cc, "-O2", "-o", str(binary), str(HARNESS_SOURCE), "-lmodsecurity"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     if proc.returncode != 0:
-        raise RuntimeError("could not build the CRS harness; is libmodsecurity 3 installed?\n"
-                           + proc.stderr.strip()[-600:])
+        raise RuntimeError(
+            "could not build the CRS harness; is libmodsecurity 3 installed?\n"
+            + proc.stderr.strip()[-600:]
+        )
     return binary
 
 
@@ -86,7 +92,8 @@ def write_config(work: Path, crs_root: Path, level: int) -> Path:
     if not setup.exists() or not rules.is_dir():
         raise RuntimeError(f"CRS rules not found under {crs_root} (run `shapetrap fetch`)")
     conf = work / f"pl{level}.conf"
-    conf.write_text(f"""SecRuleEngine On
+    conf.write_text(
+        f"""SecRuleEngine On
 SecRequestBodyAccess On
 SecRequestBodyLimit 1048576
 SecRequestBodyNoFilesLimit 1048576
@@ -97,13 +104,17 @@ SecRule REQUEST_HEADERS:Content-Type "^application/json" "id:200001,phase:1,t:no
 Include {setup.resolve()}
 SecAction "id:900001,phase:1,pass,t:none,nolog,setvar:tx.blocking_paranoia_level={level},setvar:tx.detection_paranoia_level={level}"
 Include {rules.resolve()}/*.conf
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     return conf
 
 
 def _evaluate(binary: Path, conf: Path, texts: list[str]) -> list[tuple[int, str]]:
     payload = "\n".join(_line(t) for t in texts) + "\n"
-    proc = subprocess.run([str(binary), str(conf)], input=payload, capture_output=True, text=True)
+    proc = subprocess.run(
+        [str(binary), str(conf)], input=payload, capture_output=True, text=True, check=False
+    )
     if proc.returncode != 0:
         raise RuntimeError("CRS harness failed: " + proc.stderr.strip()[-600:])
     out = []
@@ -119,7 +130,7 @@ def evaluate(binary: Path, conf: Path, texts: list[str], workers: int = 2) -> li
     if not texts:
         return []
     size = max(1, -(-len(texts) // workers))
-    chunks = [texts[i:i + size] for i in range(0, len(texts), size)]
+    chunks = [texts[i : i + size] for i in range(0, len(texts), size)]
     with ThreadPoolExecutor(max_workers=workers) as pool:
         parts = list(pool.map(lambda c: _evaluate(binary, conf, c), chunks))
     return [v for part in parts for v in part]
@@ -143,8 +154,10 @@ def run_crs(cfg: dict, base: Path, out: Path, corpus: dict[str, list[dict]], log
         for t, (status, ids) in zip(texts, results):
             verdict[t][f"pl{level}"] = int(status != 0)
             verdict[t][f"rules{level}"] = ids
-        log(f"  CRS paranoia level {level}: {sum(v[f'pl{level}'] for v in verdict.values())} of "
-            f"{len(texts)} distinct strings blocked")
+        log(
+            f"  CRS paranoia level {level}: {sum(v[f'pl{level}'] for v in verdict.values())} of "
+            f"{len(texts)} distinct strings blocked"
+        )
     for name, rows in corpus.items():
         with open(work / f"{name}.csv", "w", encoding="utf-8", newline="") as fh:
             w = csv.writer(fh)
@@ -167,8 +180,9 @@ def attach(corpus: dict[str, list[dict]], out: Path) -> bool:
         with open(path, encoding="utf-8", newline="") as fh:
             data = list(csv.DictReader(fh))
         # Verdicts must belong to exactly this corpus: same length, same strings.
-        if len(data) != len(rows) or any(v["text_sha1"] != _tag(r["text"])
-                                         for r, v in zip(rows, data)):
+        if len(data) != len(rows) or any(
+            v["text_sha1"] != _tag(r["text"]) for r, v in zip(rows, data)
+        ):
             return False
         loaded[name] = data
     for name, rows in corpus.items():

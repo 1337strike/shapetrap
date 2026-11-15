@@ -18,6 +18,7 @@ import random
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Any
 
 from .canon import family_key, norm_key
 from .shapes import detect_shape
@@ -35,6 +36,7 @@ def _read_lines(path: Path) -> list[str]:
 # --------------------------------------------------------------------------
 # Loaders
 # --------------------------------------------------------------------------
+
 
 def load_paper1(entry: dict, base: Path):
     """The earlier paper's 1,012-string corpus (template benign + SQLi/XSS
@@ -70,11 +72,17 @@ def load_paper1(entry: dict, base: Path):
 
 def load_hpd(entry: dict, base: Path):
     """HttpParamsDataset: bare parameter values."""
-    amap = {"norm": "benign", "sqli": "sqli", "xss": "xss", "cmdi": "cmdi",
-            "path-traversal": "traversal"}
+    amap = {
+        "norm": "benign",
+        "sqli": "sqli",
+        "xss": "xss",
+        "cmdi": "cmdi",
+        "path-traversal": "traversal",
+    }
     rows, bad = [], 0
-    with open(base / entry["path"] / "payload_full.csv", encoding="utf-8",
-              errors="replace", newline="") as fh:
+    with open(
+        base / entry["path"] / "payload_full.csv", encoding="utf-8", errors="replace", newline=""
+    ) as fh:
         for r in csv.DictReader(fh):
             atype = amap.get((r.get("attack_type") or "").strip())
             if atype is None or r.get("payload") is None:
@@ -92,12 +100,12 @@ def _csic_requests(path: Path):
     starts = list(_REQ_START.finditer(text))
     for i, m in enumerate(starts):
         end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
-        block = text[m.end():end]
+        block = text[m.end() : end]
         method, url = m.group(1), m.group(2)
         if method == "GET":
             payload = url.partition("?")[2]
         else:
-            head, sep, body = block.partition("\n\n")
+            _head, sep, body = block.partition("\n\n")
             payload = body.strip() if sep else ""
         yield payload
 
@@ -109,7 +117,7 @@ def load_csic(entry: dict, base: Path):
     files = [("normalTrafficTest.txt", "benign"), ("anomalousTrafficTest.txt", "attack")]
     if entry.get("include_training", True):
         files.insert(0, ("normalTrafficTraining.txt", "benign"))
-    rows, total, empty = [], Counter(), Counter()
+    rows, total, empty = [], Counter[str](), Counter[str]()
     for fname, atype in files:
         for payload in _csic_requests(root / fname):
             total[fname] += 1
@@ -120,14 +128,21 @@ def load_csic(entry: dict, base: Path):
     return rows, {"requests": dict(total), "requests_without_parameters": dict(empty)}
 
 
-_ECML_SAMPLE = re.compile(r"<sample id=\"\d+\">(.*?)</sample>", re.S)
-_ECML_TYPES = {"Valid": "benign", "SqlInjection": "sqli", "XSS": "xss",
-               "OsCommanding": "cmdi", "PathTransversal": "traversal",
-               "LdapInjection": "other", "XPathInjection": "other", "SSI": "other"}
+_ECML_SAMPLE = re.compile(r"<sample id=\"\d+\">(.*?)</sample>", re.DOTALL)
+_ECML_TYPES = {
+    "Valid": "benign",
+    "SqlInjection": "sqli",
+    "XSS": "xss",
+    "OsCommanding": "cmdi",
+    "PathTransversal": "traversal",
+    "LdapInjection": "other",
+    "XPathInjection": "other",
+    "SSI": "other",
+}
 
 
 def _cdata(tag: str, block: str) -> str:
-    m = re.search(rf"<{tag}><!\[CDATA\[(.*?)\]\]></{tag}>", block, re.S)
+    m = re.search(rf"<{tag}><!\[CDATA\[(.*?)\]\]></{tag}>", block, re.DOTALL)
     return m.group(1).strip() if m else ""
 
 
@@ -136,10 +151,10 @@ def load_ecml(entry: dict, base: Path):
     in-context samples whose labelled attack interval lies in the query or the
     body, and the text is that field, so the label matches what is kept."""
     xml = (base / entry["path"]).read_text(encoding="utf-8", errors="replace")
-    rows, skipped = [], Counter()
+    rows, skipped = [], Counter[str]()
     for m in _ECML_SAMPLE.finditer(xml):
         block = m.group(1)
-        atype = _ECML_TYPES.get(re.search(r"<type>(.*?)</type>", block).group(1))
+        atype = _ECML_TYPES.get(re.search(r"<type>(.*?)</type>", block).group(1))  # type: ignore[union-attr]
         query, body = _cdata("query", block), _cdata("body", block)
         if atype == "benign":
             text = "&".join(p for p in (query, body) if p)
@@ -164,8 +179,12 @@ def load_gran(entry: dict, base: Path):
     """Granqvist & Holmberg payload collection (mostly bare values)."""
     amap = {"LEGAL": "benign", "SQL": "sqli", "XSS": "xss", "SHELL": "shell"}
     rows, bad = [], 0
-    with open(base / entry["path"] / "data" / "payloads.csv", encoding="utf-8",
-              errors="replace", newline="") as fh:
+    with open(
+        base / entry["path"] / "data" / "payloads.csv",
+        encoding="utf-8",
+        errors="replace",
+        newline="",
+    ) as fh:
         for r in csv.DictReader(fh):
             atype = amap.get((r.get("injection_type") or "").strip())
             if atype is None or not r.get("payload"):
@@ -205,10 +224,12 @@ def load_cowrie(entry: dict, base: Path):
     """
     root = base / entry["path"]
     if not root.exists():
-        raise SystemExit(f"{root} not found. Put your Cowrie JSONL there, or remove this "
-                         "dataset from the config.")
+        raise SystemExit(
+            f"{root} not found. Put your Cowrie JSONL there, or remove this "
+            "dataset from the config."
+        )
     files = sorted(root.glob("*.json*")) if root.is_dir() else [root]
-    commands, controls = Counter(), Counter()
+    commands, controls = Counter[str](), Counter[str]()
     sessions, sources, stamps = set(), set(), []
     records = bad = 0
     for path in files:
@@ -238,12 +259,19 @@ def load_cowrie(entry: dict, base: Path):
     rows = [{"text": t, "atype": "shell", "weight": n} for t, n in commands.items()]
     if entry.get("credentials_as_control", True):
         rows += [{"text": t, "atype": "benign", "weight": n} for t, n in controls.items()]
-    notes = {"files": len(files), "records": records, "unparsed_lines": bad,
-             "sessions": len(sessions - {None}), "source_addresses": len(sources - {None}),
-             "command_events": sum(commands.values()), "distinct_commands": len(commands),
-             "credential_events": sum(controls.values()), "distinct_credentials": len(controls),
-             "first_timestamp": min(stamps) if stamps else None,
-             "last_timestamp": max(stamps) if stamps else None}
+    notes = {
+        "files": len(files),
+        "records": records,
+        "unparsed_lines": bad,
+        "sessions": len(sessions - {None}),
+        "source_addresses": len(sources - {None}),
+        "command_events": sum(commands.values()),
+        "distinct_commands": len(commands),
+        "credential_events": sum(controls.values()),
+        "distinct_credentials": len(controls),
+        "first_timestamp": min(stamps) if stamps else None,
+        "last_timestamp": max(stamps) if stamps else None,
+    }
     return rows, notes
 
 
@@ -272,8 +300,17 @@ def load_modsec(entry: dict, base: Path):
     return rows, {"strings_per_part": counts}
 
 
-_CRS_FAMILIES = {"930": "traversal", "931": "other", "932": "cmdi", "933": "other",
-                 "934": "other", "941": "xss", "942": "sqli", "943": "other", "944": "other"}
+_CRS_FAMILIES = {
+    "930": "traversal",
+    "931": "other",
+    "932": "cmdi",
+    "933": "other",
+    "934": "other",
+    "941": "xss",
+    "942": "sqli",
+    "943": "other",
+    "944": "other",
+}
 
 
 def load_crs(entry: dict, base: Path):
@@ -283,8 +320,9 @@ def load_crs(entry: dict, base: Path):
     the rule authors.  Text is the request body, else the query string; tests
     whose payload sits in headers or cookies are skipped."""
     import yaml
+
     root = base / entry["path"] / "tests" / "regression" / "tests"
-    rows, skipped = [], Counter()
+    rows, skipped = [], Counter[str]()
     for folder in sorted(root.glob("REQUEST-9*-APPLICATION-ATTACK-*")):
         atype = _CRS_FAMILIES.get(folder.name.split("-")[1])
         if atype is None:
@@ -307,7 +345,11 @@ def load_crs(entry: dict, base: Path):
                         skipped["no_log_expectation"] += 1
                         continue
                     data, uri = inp.get("data"), inp.get("uri") or ""
-                    text = data if isinstance(data, str) and data.strip() else str(uri).partition("?")[2]
+                    text = (
+                        data
+                        if isinstance(data, str) and data.strip()
+                        else str(uri).partition("?")[2]
+                    )
                     if not text.strip():
                         skipped["payload_not_in_query_or_body"] += 1
                         continue
@@ -315,10 +357,17 @@ def load_crs(entry: dict, base: Path):
     return rows, {"skipped": dict(skipped)}
 
 
-_PATT_DIRS = {"SQL Injection": "sqli", "XSS Injection": "xss", "Command Injection": "cmdi",
-              "Directory Traversal": "traversal", "File Inclusion": "traversal",
-              "NoSQL Injection": "other", "LDAP Injection": "other", "XXE Injection": "other",
-              "Server Side Template Injection": "other"}
+_PATT_DIRS = {
+    "SQL Injection": "sqli",
+    "XSS Injection": "xss",
+    "Command Injection": "cmdi",
+    "Directory Traversal": "traversal",
+    "File Inclusion": "traversal",
+    "NoSQL Injection": "other",
+    "LDAP Injection": "other",
+    "XXE Injection": "other",
+    "Server Side Template Injection": "other",
+}
 
 
 def load_patt(entry: dict, base: Path):
@@ -353,9 +402,12 @@ def _zip_or_csv(path: Path):
     """Rows of a CSV file, or of the single CSV inside a zip archive."""
     import io
     import zipfile
+
     if path.suffix == ".zip":
         with zipfile.ZipFile(path) as zf, zf.open(zf.infolist()[0]) as raw:
-            yield from csv.DictReader(io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline=""))
+            yield from csv.DictReader(
+                io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="")
+            )
     else:
         with open(path, encoding="utf-8", errors="replace", newline="") as fh:
             yield from csv.DictReader(fh)
@@ -369,7 +421,7 @@ def load_copot(entry: dict, base: Path):
     (requests without parameters are counted, not used)."""
     root = base / entry["path"]
     part = entry.get("part", "cowrie")
-    attacks, controls = Counter(), Counter()
+    attacks, controls = Counter[str](), Counter[str]()
     notes: dict = {"part": part}
     if part == "cowrie":
         sessions = 0
@@ -380,12 +432,17 @@ def load_copot(entry: dict, base: Path):
             for field in ("Username(s)", "Password(s)"):
                 if r.get(field):
                     controls[r[field]] += 1
-        notes.update(sessions=sessions, command_events=sum(attacks.values()),
-                     credential_events=sum(controls.values()))
+        notes.update(
+            sessions=sessions,
+            command_events=sum(attacks.values()),
+            credential_events=sum(controls.values()),
+        )
     else:
         total = with_params = 0
-        for fname, col in (("tanner_malicious_anonymized.zip", "path"),
-                           ("h0neytr4p_malicious_anonymized.csv", "request_uri")):
+        for fname, col in (
+            ("tanner_malicious_anonymized.zip", "path"),
+            ("h0neytr4p_malicious_anonymized.csv", "request_uri"),
+        ):
             for r in _zip_or_csv(root / fname):
                 total += 1
                 query = (r.get(col) or "").partition("?")[2]
@@ -393,8 +450,10 @@ def load_copot(entry: dict, base: Path):
                     with_params += 1
                     attacks[query] += 1
         notes.update(requests=total, requests_with_parameters=with_params)
-    rows = [{"text": t, "atype": "shell" if part == "cowrie" else "attack", "weight": n}
-            for t, n in attacks.items()]
+    rows = [
+        {"text": t, "atype": "shell" if part == "cowrie" else "attack", "weight": n}
+        for t, n in attacks.items()
+    ]
     if entry.get("credentials_as_control", True):
         rows += [{"text": t, "atype": "benign", "weight": n} for t, n in controls.items()]
     return rows, notes
@@ -408,8 +467,9 @@ def load_vps(entry: dict, base: Path):
     not injection payloads.  Placeholders written by the dataset's own
     sanitizer (``<email>``, ``<token>``, ``<digits>`` ...) are left as they are."""
     import gzip
+
     root = base / entry["path"] / "data"
-    attacks, controls = Counter(), Counter()
+    attacks, controls = Counter[str](), Counter[str]()
     total = with_params = logins = 0
     for path in sorted(root.glob("web_attacks_*.csv.gz")):
         with gzip.open(path, "rt", encoding="utf-8", errors="replace", newline="") as fh:
@@ -428,8 +488,11 @@ def load_vps(entry: dict, base: Path):
                         controls[r["username"]] += 1
     rows = [{"text": t, "atype": "attack", "weight": n} for t, n in attacks.items()]
     rows += [{"text": t, "atype": "benign", "weight": n} for t, n in controls.items()]
-    return rows, {"requests": total, "requests_with_parameters": with_params,
-                  "invalid_user_events": logins}
+    return rows, {
+        "requests": total,
+        "requests_with_parameters": with_params,
+        "invalid_user_events": logins,
+    }
 
 
 def load_finch(entry: dict, base: Path):
@@ -438,17 +501,21 @@ def load_finch(entry: dict, base: Path):
     request and, separately, its body when there is one.  These are requests
     from the wild, not requests confirmed to be injections."""
     import io
+
     try:
         import zstandard
     except ImportError:
-        raise SystemExit("The finch loader needs the `zstandard` package: pip install zstandard") from None
+        raise SystemExit(
+            "The finch loader needs the `zstandard` package: pip install zstandard"
+        ) from None
     path = base / entry["path"]
     max_body = int(entry.get("max_body_chars", 8192))
-    attacks, stamps = Counter(), []
+    attacks, stamps = Counter[str](), []
     total = with_query = with_body = long_body = 0
     with open(path, "rb") as fh:
-        reader = io.TextIOWrapper(zstandard.ZstdDecompressor().stream_reader(fh),
-                                  encoding="utf-8", errors="replace")
+        reader = io.TextIOWrapper(
+            zstandard.ZstdDecompressor().stream_reader(fh), encoding="utf-8", errors="replace"
+        )
         for line in reader:
             if not line.strip():
                 continue
@@ -468,10 +535,14 @@ def load_finch(entry: dict, base: Path):
                     with_body += 1
                     attacks[body] += 1
     rows = [{"text": t, "atype": "attack", "weight": n} for t, n in attacks.items()]
-    return rows, {"requests": total, "requests_with_query": with_query,
-                  "requests_with_body": with_body, "bodies_over_limit_skipped": long_body,
-                  "first_timestamp": min(stamps) if stamps else None,
-                  "last_timestamp": max(stamps) if stamps else None}
+    return rows, {
+        "requests": total,
+        "requests_with_query": with_query,
+        "requests_with_body": with_body,
+        "bodies_over_limit_skipped": long_body,
+        "first_timestamp": min(stamps) if stamps else None,
+        "last_timestamp": max(stamps) if stamps else None,
+    }
 
 
 def load_tpot_csv(entry: dict, base: Path):
@@ -479,23 +550,32 @@ def load_tpot_csv(entry: dict, base: Path):
     commands as the attack class and attempted usernames as the non-injection
     control."""
     root = base / entry["path"]
-    attacks, controls = Counter(), Counter()
+    attacks, controls = Counter[str](), Counter[str]()
     sessions = set()
-    with open(root / "List of Commands.csv", encoding="utf-8-sig", errors="replace", newline="") as fh:
+    with open(
+        root / "List of Commands.csv", encoding="utf-8-sig", errors="replace", newline=""
+    ) as fh:
         for r in csv.DictReader(fh):
             if r.get("eventid") == "cowrie.command.input" and (r.get("input") or "").strip():
                 attacks[r["input"]] += 1
                 sessions.add(r.get("session"))
     if entry.get("usernames_as_control", True):
-        with open(root / "List of Attempted Usernames.csv", encoding="utf-8-sig",
-                  errors="replace", newline="") as fh:
+        with open(
+            root / "List of Attempted Usernames.csv",
+            encoding="utf-8-sig",
+            errors="replace",
+            newline="",
+        ) as fh:
             for r in csv.DictReader(fh):
                 if (r.get("username") or "").strip():
                     controls[r["username"]] += 1
     rows = [{"text": t, "atype": "shell", "weight": n} for t, n in attacks.items()]
     rows += [{"text": t, "atype": "benign", "weight": n} for t, n in controls.items()]
-    return rows, {"command_events": sum(attacks.values()), "sessions_with_commands": len(sessions),
-                  "username_events": sum(controls.values())}
+    return rows, {
+        "command_events": sum(attacks.values()),
+        "sessions_with_commands": len(sessions),
+        "username_events": sum(controls.values()),
+    }
 
 
 def load_csv(entry: dict, base: Path):
@@ -513,16 +593,30 @@ def load_csv(entry: dict, base: Path):
     return rows, {}
 
 
-LOADERS = {"paper1": load_paper1, "hpd": load_hpd, "csic": load_csic,
-           "ecml": load_ecml, "gran": load_gran, "fwaf": load_fwaf, "modsec": load_modsec,
-           "crs": load_crs, "patt": load_patt, "shellevo": load_shellevo, "copot": load_copot,
-           "vps": load_vps, "finch": load_finch, "tpot_csv": load_tpot_csv,
-           "cowrie": load_cowrie, "csv": load_csv}
+LOADERS = {
+    "paper1": load_paper1,
+    "hpd": load_hpd,
+    "csic": load_csic,
+    "ecml": load_ecml,
+    "gran": load_gran,
+    "fwaf": load_fwaf,
+    "modsec": load_modsec,
+    "crs": load_crs,
+    "patt": load_patt,
+    "shellevo": load_shellevo,
+    "copot": load_copot,
+    "vps": load_vps,
+    "finch": load_finch,
+    "tpot_csv": load_tpot_csv,
+    "cowrie": load_cowrie,
+    "csv": load_csv,
+}
 
 
 # --------------------------------------------------------------------------
 # Cleaning
 # --------------------------------------------------------------------------
+
 
 def _cap(rows: list[dict], cap: int | None, seed: int) -> list[dict]:
     if not cap:
@@ -538,12 +632,13 @@ def _cap(rows: list[dict], cap: int | None, seed: int) -> list[dict]:
     return out
 
 
-def prepare(rows: list[dict], seed: int, max_per_class: int | None,
-            audit_max_per_class: int | None = 100000):
+def prepare(
+    rows: list[dict], seed: int, max_per_class: int | None, audit_max_per_class: int | None = 100000
+):
     """Drop empties, de-duplicate, resolve label conflicts, cap each class and
     attach the derived columns.  Also returns a larger sample for the
     integrity audit, which should see as much of each source as possible."""
-    info = {"raw": len(rows)}
+    info: dict[str, Any] = {"raw": len(rows)}
     rows = [r for r in rows if r["text"] and r["text"].strip()]
     info["empty_dropped"] = info["raw"] - len(rows)
 
@@ -583,6 +678,7 @@ def prepare(rows: list[dict], seed: int, max_per_class: int | None,
 # Splitting
 # --------------------------------------------------------------------------
 
+
 def split_rows(rows: list[dict], seed: int, test_size: float):
     """Stratified, group-aware split: whole payload families go to one side,
     stratified by the family's class.  Rows carrying a predefined ``split``
@@ -610,8 +706,9 @@ def split_rows(rows: list[dict], seed: int, test_size: float):
         (test if r["family"] in test_fams else train).append(r)
 
     if not fixed:
-        assert not ({r["family"] for r in train} & {r["family"] for r in test}), \
+        assert not ({r["family"] for r in train} & {r["family"] for r in test}), (
             "family leakage between train and test"
+        )
     return train, test
 
 
@@ -623,13 +720,16 @@ def held_out_sources(cfg: dict) -> set[str]:
 def split_all(cfg: dict, corpus: dict[str, list[dict]], seed: int) -> dict:
     """Train/test split of every source; a test-only source is all test."""
     held = held_out_sources(cfg)
-    return {n: (([], rows) if n in held else split_rows(rows, seed, cfg["test_size"]))
-            for n, rows in corpus.items()}
+    return {
+        n: (([], rows) if n in held else split_rows(rows, seed, cfg["test_size"]))
+        for n, rows in corpus.items()
+    }
 
 
 # --------------------------------------------------------------------------
 # Corpus I/O
 # --------------------------------------------------------------------------
+
 
 def build_corpus(cfg: dict, base: Path, out_dir: Path) -> dict:
     corpus_dir = out_dir / "corpus"
@@ -640,23 +740,27 @@ def build_corpus(cfg: dict, base: Path, out_dir: Path) -> dict:
         try:
             rows, notes = loader(entry, base)
         except FileNotFoundError as exc:
-            raise SystemExit(f"[{name}] {exc.filename} not found. Run `shapetrap fetch` first, or "
-                             f"fix `path` for [datasets.{name}] in the config.") from None
+            raise SystemExit(
+                f"[{name}] {exc.filename} not found. Run `shapetrap fetch` first, or "
+                f"fix `path` for [datasets.{name}] in the config."
+            ) from None
         cap = entry.get("max_per_class", cfg.get("max_per_class"))
-        rows, audit_rows, info = prepare(rows, cfg["seed"], cap, cfg.get("audit_max_per_class", 100000))
+        rows, audit_rows, info = prepare(
+            rows, cfg["seed"], cap, cfg.get("audit_max_per_class", 100000)
+        )
         info["notes"] = notes
         info["role"] = entry.get("role", "both")
         with open(corpus_dir / f"{name}.audit.jsonl", "w", encoding="utf-8") as fh:
-            for r in audit_rows:
-                fh.write(json.dumps({"text": r["text"], "y": r["y"], "key": r["key"]},
-                                    ensure_ascii=False) + "\n")
+            fh.writelines(
+                json.dumps({"text": r["text"], "y": r["y"], "key": r["key"]}, ensure_ascii=False)
+                + "\n"
+                for r in audit_rows
+            )
         info["shape_by_class"] = {
-            y: dict(Counter(r["shape"] for r in rows if r["y"] == y))
-            for y in ("benign", "attack")
+            y: dict(Counter(r["shape"] for r in rows if r["y"] == y)) for y in ("benign", "attack")
         }
         with open(corpus_dir / f"{name}.jsonl", "w", encoding="utf-8") as fh:
-            for r in rows:
-                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+            fh.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
         summary[name] = info
     (corpus_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary

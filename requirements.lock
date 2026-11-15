@@ -1,0 +1,13 @@
+# Exact environment of the run behind the ICIMPACT paper (Python 3.12.10, Arch Linux).
+# Install with:  pip install -r requirements.lock && pip install -e . --no-deps
+# Check with:    shapetrap env
+cloudpickle==3.1.2
+joblib==1.6.0
+lightgbm==4.7.0
+narwhals==2.28.0
+numpy==2.5.4
+PyYAML==6.0.3
+scikit-learn==1.9.1
+scipy==1.18.1
+threadpoolctl==3.8.0
+zstandard==0.25.0
