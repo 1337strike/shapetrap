@@ -14,7 +14,10 @@ parameter values out of another one.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Collection
 from pathlib import Path
+from typing import Any
 
 from .canon import norm_key
 from .shapes import values_of
@@ -48,26 +51,37 @@ def _share(a: set, b: set) -> tuple[int, float]:
     return n, n / min(len(a), len(b))
 
 
-def run_audit(corpus: dict[str, list[dict]], out_dir: Path, link_threshold: float = 0.25,
-              held: set[str] = frozenset()) -> str:
+def run_audit(
+    corpus: dict[str, list[dict]],
+    out_dir: Path,
+    link_threshold: float = 0.25,
+    held: Collection[str] = frozenset(),
+) -> str:
     names = list(corpus)
     sets = {n: _sets(rows) for n, rows in corpus.items()}
-    rows, cells = [], {}
+    rows: list[dict[str, Any]] = []
+    cells: dict = {}
     for i, a in enumerate(names):
-        for b in names[i + 1:]:
+        for b in names[i + 1 :]:
             A, B = sets[a], sets[b]
             ex_n, ex_p = _share(A["exact"], B["exact"])
             nm_n, nm_p = _share(set(A["norm"]), set(B["norm"]))
             va_n, va_p = _share(A["values"], B["values"])
             bv_n, bv_p = _share(A["benign_values"], B["benign_values"])
-            conflicts = sum(1 for k, y in A["norm"].items()
-                            if k in B["norm"] and B["norm"][k] != y)
-            row = {"a": a, "b": b,
-                   "exact_n": ex_n, "exact_share": ex_p,
-                   "normalized_n": nm_n, "normalized_share": nm_p,
-                   "value_n": va_n, "value_share": va_p,
-                   "benign_value_n": bv_n, "benign_value_share": bv_p,
-                   "label_conflicts": conflicts}
+            conflicts = sum(1 for k, y in A["norm"].items() if k in B["norm"] and B["norm"][k] != y)
+            row = {
+                "a": a,
+                "b": b,
+                "exact_n": ex_n,
+                "exact_share": ex_p,
+                "normalized_n": nm_n,
+                "normalized_share": nm_p,
+                "value_n": va_n,
+                "value_share": va_p,
+                "benign_value_n": bv_n,
+                "benign_value_share": bv_p,
+                "label_conflicts": conflicts,
+            }
             rows.append(row)
             cells[(a, b)] = cells[(b, a)] = row
     write_csv(rows, out_dir / "audit_overlap.csv")
@@ -76,33 +90,53 @@ def run_audit(corpus: dict[str, list[dict]], out_dir: Path, link_threshold: floa
         return lambda a, b: "-" if a == b else pct(cells[(a, b)][key])
 
     md = "## 1. Integrity audit\n\n"
-    md += ("Share of the smaller set that also appears in the other source (%). "
-           "Values are compared after removing the container; short and purely "
-           "numeric values are ignored.\n\n")
-    md += "**Normalized string overlap (%)**\n\n" + md_matrix(names, cell("normalized_share"), "source")
-    md += "\n**Benign value-level overlap (%)**\n\n" + md_matrix(names, cell("benign_value_share"), "source")
-    worst = max(rows, key=lambda r: (r["benign_value_share"] if r["benign_value_share"] == r["benign_value_share"] else -1))
-    md += (f"\nLargest benign value-level overlap: **{worst['a']} / {worst['b']}** at "
-           f"{pct(worst['benign_value_share'])}% ({worst['benign_value_n']} shared values), "
-           f"against {pct(worst['normalized_share'])}% at string level.\n")
+    md += (
+        "Share of the smaller set that also appears in the other source (%). "
+        "Values are compared after removing the container; short and purely "
+        "numeric values are ignored.\n\n"
+    )
+    md += "**Normalized string overlap (%)**\n\n" + md_matrix(
+        names, cell("normalized_share"), "source"
+    )
+    md += "\n**Benign value-level overlap (%)**\n\n" + md_matrix(
+        names, cell("benign_value_share"), "source"
+    )
+    worst = max(
+        rows,
+        key=lambda r: (
+            r["benign_value_share"] if r["benign_value_share"] == r["benign_value_share"] else -1
+        ),
+    )
+    md += (
+        f"\nLargest benign value-level overlap: **{worst['a']} / {worst['b']}** at "
+        f"{pct(worst['benign_value_share'])}% ({worst['benign_value_n']} shared values), "
+        f"against {pct(worst['normalized_share'])}% at string level.\n"
+    )
     # Sources linked by a large overlap are not independent collections.
     groups, other_pairs = provenance_groups(rows, names, held, link_threshold)
     linked = [c for c in groups if len(c) > 1]
     if linked:
-        md += (f"\nBenchmark sources linked at >= {pct(link_threshold, 0)}% on either level (shared "
-               "provenance, not independent collections): " + "; ".join(" + ".join(c) for c in linked) + ".\n")
+        md += (
+            f"\nBenchmark sources linked at >= {pct(link_threshold, 0)}% on either level (shared "
+            "provenance, not independent collections): "
+            + "; ".join(" + ".join(c) for c in linked)
+            + ".\n"
+        )
     else:
         md += f"\nNo pair of benchmark sources reaches {pct(link_threshold, 0)}% on either level.\n"
     if other_pairs:
-        md += (f"\nPairs involving a held-out source at >= {pct(link_threshold, 0)}% (shared payload lists "
-               "or common credential dictionaries): " + "; ".join(other_pairs) + ".\n")
+        md += (
+            f"\nPairs involving a held-out source at >= {pct(link_threshold, 0)}% (shared payload lists "
+            "or common credential dictionaries): " + "; ".join(other_pairs) + ".\n"
+        )
     total_conf = sum(r["label_conflicts"] for r in rows)
     md += f"\nCross-source label conflicts on normalized strings: {total_conf}.\n"
     return md
 
 
-def provenance_groups(rows: list[dict], names: list[str], held=frozenset(),
-                      link_threshold: float = 0.25) -> tuple[list[list[str]], list[str]]:
+def provenance_groups(
+    rows: list[dict], names: list[str], held=frozenset(), link_threshold: float = 0.25
+) -> tuple[list[list[str]], list[str]]:
     """Benchmark sources grouped by shared provenance.
 
     Two sources are linked when their normalized-string overlap or their
@@ -124,7 +158,7 @@ def provenance_groups(rows: list[dict], names: list[str], held=frozenset(),
         if r["a"] not in parent or r["b"] not in parent:
             continue
         shares = [float(r["normalized_share"]), float(r["benign_value_share"])]
-        if not any(v == v and v >= link_threshold for v in shares):
+        if not any(not math.isnan(v) and v >= link_threshold for v in shares):
             continue
         if r["a"] in held or r["b"] in held:
             other_pairs.append(f"{r['a']} / {r['b']}")

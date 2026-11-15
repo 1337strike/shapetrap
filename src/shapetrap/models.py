@@ -59,8 +59,12 @@ CMDI_RULES = [
     r"(`[^`]+`)",
     r"(\bcmd(\.exe)?\s*/c\b)",
 ]
-RULESETS = [("sqli", SQLI_RULES), ("xss", XSS_RULES),
-            ("traversal", TRAVERSAL_RULES), ("cmdi", CMDI_RULES)]
+RULESETS = [
+    ("sqli", SQLI_RULES),
+    ("xss", XSS_RULES),
+    ("traversal", TRAVERSAL_RULES),
+    ("cmdi", CMDI_RULES),
+]
 
 
 class Signature:
@@ -68,8 +72,9 @@ class Signature:
 
     def __init__(self, prep: str):
         self.prep = prep
-        self._rules = [(label, [re.compile(p, re.IGNORECASE) for p in pats])
-                       for label, pats in RULESETS]
+        self._rules = [
+            (label, [re.compile(p, re.IGNORECASE) for p in pats]) for label, pats in RULESETS
+        ]
 
     def fit(self, texts, labels):
         return self
@@ -136,19 +141,29 @@ def make_clf(kind: str, seed: int = 0, paper_settings: bool = False):
     """
     if kind == "rf":
         from sklearn.ensemble import RandomForestClassifier
+
         return RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=seed)
     if kind == "gbm":
         try:
             from lightgbm import LGBMClassifier
         except ImportError:
             raise SystemExit("The gbm detector needs LightGBM: pip install lightgbm") from None
-        return LGBMClassifier(n_estimators=100, learning_rate=0.1, num_leaves=31, n_jobs=2,
-                              random_state=seed, deterministic=True, force_row_wise=True,
-                              verbose=-1)
+        return LGBMClassifier(
+            n_estimators=100,
+            learning_rate=0.1,
+            num_leaves=31,
+            n_jobs=2,
+            random_state=seed,
+            deterministic=True,
+            force_row_wise=True,
+            verbose=-1,
+        )
     if kind == "mlp":
         from sklearn.neural_network import MLPClassifier
-        return MLPClassifier(hidden_layer_sizes=(64,), max_iter=30, early_stopping=True,
-                             random_state=seed)
+
+        return MLPClassifier(
+            hidden_layer_sizes=(64,), max_iter=30, early_stopping=True, random_state=seed
+        )
     if kind == "lr":
         if paper_settings:
             return LogisticRegression(C=10.0, max_iter=1000)
@@ -166,12 +181,23 @@ class Features:
     """Preprocessing + TF-IDF, shared by every classifier that uses the same
     preprocessing and augmentation, so each string is tokenized once."""
 
-    def __init__(self, prep: str, tokenizer: str = "web", max_features: int = 4000,
-                 augment: bool = False, seed: int = 0):
+    def __init__(
+        self,
+        prep: str,
+        tokenizer: str = "web",
+        max_features: int = 4000,
+        augment: bool = False,
+        seed: int = 0,
+    ):
         self.prep, self.augment, self.seed = prep, augment, seed
-        self.vec = TfidfVectorizer(tokenizer=TOKENIZERS[tokenizer], token_pattern=None,
-                                   lowercase=False, max_features=max_features,
-                                   ngram_range=(1, 2), sublinear_tf=True)
+        self.vec = TfidfVectorizer(
+            tokenizer=TOKENIZERS[tokenizer],
+            token_pattern=None,
+            lowercase=False,
+            max_features=max_features,
+            ngram_range=(1, 2),
+            sublinear_tf=True,
+        )
 
     def _prep(self, texts):
         return [preprocess(t, self.prep) for t in texts]
@@ -198,9 +224,16 @@ class Features:
 
 
 class TfidfDetector:
-    def __init__(self, kind: str, prep: str, tokenizer: str = "web",
-                 max_features: int = 4000, augment: bool = False, seed: int = 0,
-                 paper_settings: bool = False):
+    def __init__(
+        self,
+        kind: str,
+        prep: str,
+        tokenizer: str = "web",
+        max_features: int = 4000,
+        augment: bool = False,
+        seed: int = 0,
+        paper_settings: bool = False,
+    ):
         self.kind, self.prep, self.augment, self.seed = kind, prep, augment, seed
         self.features = Features(prep, tokenizer, max_features, augment, seed)
         self.vec = self.features.vec
@@ -258,9 +291,14 @@ class ValueSpace:
 
     def __init__(self, tokenizer: str = "web", max_features: int = 4000, rounds: int = 2):
         self.rounds = rounds
-        self.vec = TfidfVectorizer(tokenizer=TOKENIZERS[tokenizer], token_pattern=None,
-                                   lowercase=False, max_features=max_features,
-                                   ngram_range=(1, 2), sublinear_tf=True)
+        self.vec = TfidfVectorizer(
+            tokenizer=TOKENIZERS[tokenizer],
+            token_pattern=None,
+            lowercase=False,
+            max_features=max_features,
+            ngram_range=(1, 2),
+            sublinear_tf=True,
+        )
 
     @staticmethod
     def bags(texts):
@@ -293,7 +331,7 @@ class ValueSpace:
                 break
             score = attack_score(clf, X)
             idx = np.flatnonzero(multi)
-            order = idx[np.lexsort((-score[idx], owner[idx]))]      # by bag, best first
+            order = idx[np.lexsort((-score[idx], owner[idx]))]  # by bag, best first
             first = np.ones(len(order), dtype=bool)
             first[1:] = owner[order][1:] != owner[order][:-1]
             new_keep = ~multi
@@ -326,9 +364,14 @@ class ValueSpace:
 def make_detector(kind: str, prep: str, cfg: dict, augment: bool = False, seed: int = 0):
     if kind == "sig":
         return Signature(prep)
-    return TfidfDetector(kind, prep, tokenizer=cfg.get("tokenizer", "web"),
-                         max_features=cfg.get("max_features", 4000),
-                         augment=augment, seed=seed)
+    return TfidfDetector(
+        kind,
+        prep,
+        tokenizer=cfg.get("tokenizer", "web"),
+        max_features=cfg.get("max_features", 4000),
+        augment=augment,
+        seed=seed,
+    )
 
 
 def detector_grid(cfg: dict):
