@@ -58,8 +58,7 @@ def pct(v, digits: int = 1) -> str:
 
 
 def md_table(header: list[str], rows: list[list]) -> str:
-    out = ["| " + " | ".join(header) + " |",
-           "|" + "|".join("---" for _ in header) + "|"]
+    out = ["| " + " | ".join(header) + " |", "|" + "|".join("---" for _ in header) + "|"]
     for r in rows:
         out.append("| " + " | ".join(str(c) for c in r) + " |")
     return "\n".join(out) + "\n"
