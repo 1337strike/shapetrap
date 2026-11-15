@@ -1,5 +1,7 @@
 # shapetrap
 
+[![CI](https://github.com/1337strike/shapetrap/actions/workflows/ci.yml/badge.svg)](https://github.com/1337strike/shapetrap/actions/workflows/ci.yml)
+
 A command-line toolkit that audits lightweight web-injection detectors across datasets. It answers one question: **does a detector learn the attack, or the shape of the input?**
 
 The *shape* of an input is the container it arrives in, regardless of what it carries: `q=laptop` (key-value), `laptop` (bare), `{"q": "laptop"}` (JSON), `/a/b` (path), or empty. Many public datasets put benign inputs in one container and attacks in another, so a classifier can score above 99% on its own test split without looking at the payload at all.
