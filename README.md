@@ -39,13 +39,22 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+To get the exact package versions behind the results in `out/` (recommended when you want to compare numbers), install from the lock file instead, with Python 3.12:
+
+```bash
+pip install -r requirements-dev.lock
+pip install -e . --no-deps
+shapetrap env        # checks the installed packages against requirements.lock
+```
+
 Without `gcc` or libmodsecurity the `crs` step is skipped with a message, and the local signature set is used as the reference instead.
 
 ## Quick start
 
 ```bash
 shapetrap fetch      # download the 14 public source repositories into data/raw (about 950 MB)
-shapetrap anchor     # sanity check: reproduces a known reference result
+shapetrap env        # are the installed packages the ones in requirements.lock?
+shapetrap anchor     # sanity check: must reproduce a known reference result exactly
 shapetrap all        # build -> audit -> crs -> run -> probe -> explain -> report
 pytest               # 52 tests
 ```
@@ -68,7 +77,8 @@ The result is `out/REPORT.md`. A full run takes about two and a half to three ho
 | `explain` | Logistic-regression coefficients: strongest cues, container tokens, features whose sign flips | `explain_*.csv` |
 | `report` | Merge all sections into one report | `REPORT.md` |
 | `all` | Every step above except `fetch` | |
-| `anchor` | Sanity check: train on the `sqlixss-detector` corpus, test on HttpParamsDataset, and compare with the known reference numbers (97.03% of benign inputs flagged on raw input) | terminal |
+| `anchor` | Sanity check: train on the `sqlixss-detector` corpus, test on HttpParamsDataset, and compare with the known reference numbers (97.03% of benign inputs flagged on raw input). Exits with an error if they are not reproduced exactly | terminal |
+| `env` | Compare the installed packages with `requirements.lock`. Exits with an error on any difference | terminal |
 
 Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
 
@@ -177,7 +187,7 @@ Seeds, the cap per class, the tokenizer, the number of features, and the list of
 
 ## Example results
 
-The `out/` folder in this repository holds a complete run of version 0.6.0 with the default configuration (0.6.1 has the same code and adds these results): seeds 42, 43, 44; 31 detector configurations; Python 3.12.10, scikit-learn 1.9.1, NumPy 2.5.4, SciPy 1.18.1, LightGBM 4.7.0, libmodsecurity 3.0.17, CRS at commit `e587261`.
+The `out/` folder in this repository holds a complete run of version 0.6.0 with the default configuration (0.6.1 and 0.7.0 produce the same numbers; 0.7.0 only reorganizes and checks the code): seeds 42, 43, 44; 31 detector configurations; Python 3.12.10, scikit-learn 1.9.1, NumPy 2.5.4, SciPy 1.18.1, LightGBM 4.7.0, libmodsecurity 3.0.17, CRS at commit `e587261`.
 
 **Performance collapses across datasets.** Logistic regression on raw input, mean over the eight benchmark sources:
 
@@ -250,8 +260,10 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 
 ## Reproducibility
 
+- `requirements.lock` pins the package versions of the run in `out/` (Python 3.12.10). `shapetrap env` tells you whether your environment matches it, and `shapetrap all` prints a note when it does not.
 - Linear models are trained to full convergence (`tol=1e-8`). With scikit-learn's default tolerance, in-distribution scores are unaffected, but single cross-dataset cells can differ by tens of points between machines.
 - A second run of the same version on different hardware gave the same conclusions and the same p-values for the main tests. Individual logistic-regression cells differed by at most 0.6 points, caused by ties at the 4,000-feature vocabulary cut-off, which NumPy breaks differently on different CPUs. Averages of the random forest, LightGBM, and MLP differed by at most 1.8 points.
+- Random-forest scores are averaged over trees in parallel, so the last bits of a score can change from one call to the next. Decisions never change, but the random forest's AUC can differ in the fifth decimal between two runs on the same machine.
 - CRS verdicts depend slightly on the libmodsecurity version: out of 272,242 strings, level 1 blocked 105,062 with 3.0.17 and 105,129 with 3.0.12.
 - Report numbers from a single run, and record the library versions printed at the top of `REPORT.md`.
 
@@ -276,6 +288,17 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 - Deterministic tie-breaking at the vocabulary cut-off.
 - More containers: multipart, XML, nested.
 - Loaders for CyberLab honeynet, COW160x4, and SR-BH 2020.
+
+## Development
+
+```bash
+pip install -r requirements-dev.lock && pip install -e . --no-deps
+ruff check src tests && ruff format --check src tests
+mypy src
+pytest
+```
+
+GitHub Actions runs the same checks on every push and pull request. Training and scoring live in `experiment.py`; the markdown sections live in `report.py`, which only reads the CSV files of a run.
 
 ## Security
 

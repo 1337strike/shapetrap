@@ -18,6 +18,7 @@ Three outputs:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -38,8 +39,14 @@ def benign_margin(clf) -> np.ndarray:
     return W[b] - W[others].mean(axis=0)
 
 
-def run_explain(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, prep: str = "raw",
-                top_k: int = 12, min_abs: float = 1.0) -> str:
+def run_explain(
+    cfg: dict,
+    corpus: dict[str, list[dict]],
+    out_dir: Path,
+    prep: str = "raw",
+    top_k: int = 12,
+    min_abs: float = 1.0,
+) -> str:
     seed = cfg["seeds"][0]
     margins: dict[str, dict[str, float]] = {}
     empties = []
@@ -61,46 +68,85 @@ def run_explain(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, prep: s
         empties.append(row)
 
     names = list(margins)
-    cue_rows = []
+    cue_rows: list[dict[str, Any]] = []
     for name in names:
         ranked = sorted(margins[name].items(), key=lambda kv: kv[1])
         for rank, (tok, w) in enumerate(reversed(ranked[-top_k:]), 1):
-            cue_rows.append({"source": name, "side": "benign", "rank": rank, "feature": tok, "margin": w})
+            cue_rows.append(
+                {"source": name, "side": "benign", "rank": rank, "feature": tok, "margin": w}
+            )
         for rank, (tok, w) in enumerate(ranked[:top_k], 1):
-            cue_rows.append({"source": name, "side": "attack", "rank": rank, "feature": tok, "margin": w})
+            cue_rows.append(
+                {"source": name, "side": "attack", "rank": rank, "feature": tok, "margin": w}
+            )
     write_csv(cue_rows, out_dir / f"explain_cues_{prep}.csv")
 
-    flips = []
+    flips: list[dict[str, Any]] = []
     all_feats = set().union(*(set(m) for m in margins.values())) if margins else set()
     for tok in all_feats:
-        vals = {n: margins[n][tok] for n in names if tok in margins[n] and abs(margins[n][tok]) >= min_abs}
+        vals = {
+            n: margins[n][tok]
+            for n in names
+            if tok in margins[n] and abs(margins[n][tok]) >= min_abs
+        }
         pos = [n for n, v in vals.items() if v > 0]
         neg = [n for n, v in vals.items() if v < 0]
         if pos and neg:
-            flips.append({"feature": tok, "benign_cue_in": " ".join(pos), "attack_cue_in": " ".join(neg),
-                          "spread": max(vals.values()) - min(vals.values()),
-                          **{f"margin_{n}": margins[n].get(tok, float("nan")) for n in names}})
+            flips.append(
+                {
+                    "feature": tok,
+                    "benign_cue_in": " ".join(pos),
+                    "attack_cue_in": " ".join(neg),
+                    "spread": max(vals.values()) - min(vals.values()),
+                    **{f"margin_{n}": margins[n].get(tok, float("nan")) for n in names},
+                }
+            )
     flips.sort(key=lambda r: -r["spread"])
     write_csv(flips, out_dir / f"explain_sign_flips_{prep}.csv")
 
     md = f"## 5. What the logistic model learned (`lr-{prep}`)\n\n"
-    md += ("Benign margin of each feature: positive is evidence for benign, negative for an "
-           "attack. Read directly from the coefficients.\n\n")
+    md += (
+        "Benign margin of each feature: positive is evidence for benign, negative for an "
+        "attack. Read directly from the coefficients.\n\n"
+    )
     md += "**Container tokens**\n\n"
-    md += md_table(["token"] + names,
-                   [[f"`{t}`"] + [fmt(margins[n].get(t), 2) if t in margins[n] else "-" for n in names]
-                    for t in CONTAINER_TOKENS])
+    md += md_table(
+        ["token"] + names,
+        [
+            [f"`{t}`"] + [fmt(margins[n].get(t), 2) if t in margins[n] else "-" for n in names]
+            for t in CONTAINER_TOKENS
+        ],
+    )
     md += "\n**Strongest benign cues per source**\n\n"
-    md += md_table(["source", "features (margin)"],
-                   [[n, ", ".join(f"`{r['feature']}` ({r['margin']:+.1f})" for r in cue_rows
-                                  if r["source"] == n and r["side"] == "benign" and r["rank"] <= 6)]
-                    for n in names])
-    md += (f"\n**Features whose sign flips between sources** (|margin| >= {min_abs} on both sides): "
-           f"{len(flips)}. Largest spreads:\n\n")
-    md += md_table(["feature", "benign cue in", "attack cue in", "spread"],
-                   [[f"`{r['feature']}`", r["benign_cue_in"], r["attack_cue_in"], fmt(r["spread"], 1)]
-                    for r in flips[:12]])
+    md += md_table(
+        ["source", "features (margin)"],
+        [
+            [
+                n,
+                ", ".join(
+                    f"`{r['feature']}` ({r['margin']:+.1f})"
+                    for r in cue_rows
+                    if r["source"] == n and r["side"] == "benign" and r["rank"] <= 6
+                ),
+            ]
+            for n in names
+        ],
+    )
+    md += (
+        f"\n**Features whose sign flips between sources** (|margin| >= {min_abs} on both sides): "
+        f"{len(flips)}. Largest spreads:\n\n"
+    )
+    md += md_table(
+        ["feature", "benign cue in", "attack cue in", "spread"],
+        [
+            [f"`{r['feature']}`", r["benign_cue_in"], r["attack_cue_in"], fmt(r["spread"], 1)]
+            for r in flips[:12]
+        ],
+    )
     md += "\n**Decision on an input with no known feature (empty or out of vocabulary)**\n\n"
-    md += md_table(["source", "LR", "MNB", "SVM"], [[e["source"], e["lr"], e["mnb"], e["svm"]] for e in empties])
+    md += md_table(
+        ["source", "LR", "MNB", "SVM"],
+        [[e["source"], e["lr"], e["mnb"], e["svm"]] for e in empties],
+    )
     write_csv(empties, out_dir / f"explain_empty_input_{prep}.csv")
     return md

@@ -113,7 +113,7 @@ def decontain(text: str) -> list[str]:
         return []
     pairs = split_kv(s)
     if pairs is not None:
-        out = []
+        out: list[str] = []
         for key, value in pairs:
             if not _PLAIN_KEY.match(key):
                 out.append(key)
@@ -125,7 +125,7 @@ def decontain(text: str) -> list[str]:
             obj = json.loads(s)
         except ValueError:
             return [s]
-        out: list[str] = []
+        out = []
         _json_items(obj, out)
         return out
     if _PATH.match(s) and "?" in s:
