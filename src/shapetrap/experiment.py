@@ -185,6 +185,8 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
     )
     shape_base = cfg.get("shape_baseline", False)
     rewrite_fns = rewrites_for(cfg)
+    # Learned configurations to combine with the CRS (paranoia level 1).
+    hybrids = set(cfg.get("hybrid_configs", []))
     cells: list[dict] = []
     interventions: list[dict] = []
     t0 = time.time()
@@ -283,6 +285,16 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                     )
                 )
                 cells.append(row)
+                if name in hybrids and "crs" in v:
+                    # Value classifier combined with the rule set, which parses
+                    # the request into arguments itself.  Scores keep the
+                    # learned ranking inside each CRS verdict, so thresholds
+                    # still apply: AND puts every CRS pass below every CRS
+                    # block, OR puts every CRS block above every pass.
+                    c = v["crs"][1]
+                    s = score if score is not None else flag.astype(float)
+                    record(f"and-{name}", tgt, flag & c, known, np.where(c, s, s - 2.0))
+                    record(f"or-{name}", tgt, flag | c, known, np.where(c, s + 2.0, s))
 
             if "sig" in cfg["detectors"]:
                 for prep in [p for p in cfg["preprocess"] if p in SIGNATURE_PREPS]:
