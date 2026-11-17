@@ -95,3 +95,66 @@ def test_charcnn_handles_empty_and_modes():
     assert det.empty_prediction() in det.classes_
     with pytest.raises(ValueError):
         CharCNNDetector("vmil")
+
+
+def _tiny_bert(folder, texts):
+    """A small random BERT with a word-piece vocabulary built on the toy data,
+    so the test needs no download."""
+    from tokenizers import BertWordPieceTokenizer
+    from transformers import BertConfig, BertForSequenceClassification, PreTrainedTokenizerFast
+
+    wp = BertWordPieceTokenizer(lowercase=True)
+    wp.train_from_iterator(texts, vocab_size=300, min_frequency=1)
+    tok = PreTrainedTokenizerFast(
+        tokenizer_object=wp._tokenizer,
+        unk_token="[UNK]",
+        cls_token="[CLS]",
+        sep_token="[SEP]",
+        pad_token="[PAD]",
+        mask_token="[MASK]",
+    )
+    tok.save_pretrained(str(folder))
+    cfg = BertConfig(
+        vocab_size=len(tok),
+        hidden_size=32,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        intermediate_size=64,
+        max_position_embeddings=64,
+    )
+    import torch
+
+    torch.manual_seed(0)
+    BertForSequenceClassification(cfg).save_pretrained(str(folder))
+    return str(folder)
+
+
+def test_bert_detector_trains_on_a_local_model(tmp_path):
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from shapetrap.neural import BertDetector, make_neural
+
+    texts, labels = _toy()
+    model = _tiny_bert(tmp_path, texts)
+    params = {
+        "model": model,
+        "max_tokens": 16,
+        "epochs": 12,
+        "batch_size": 16,
+        "lr": 2e-3,
+        "threads": 1,
+        "device": "cpu",
+    }
+    det = BertDetector("canon", seed=3, params=params).fit(texts, labels)
+    pred, score = det.predict_and_score(texts)
+    assert (pred == np.array(labels, dtype=object)).mean() > 0.8
+    assert score[150:].mean() > score[:150].mean()
+    # Head and tail are kept when a string is longer than max_tokens.
+    ids = det._ids(["laptop " * 40 + "<script>alert(1)</script>"])[0]
+    assert len(ids) == 16
+    assert det.tok.unk_token_id not in ids
+    assert ids[-2] == det._ids(["</script>"])[0][-2]
+    sub = make_neural("bert", "raw", {"bert": {**params, "max_train": 90}}, seed=1).fit(
+        texts, labels
+    )
+    assert set(sub.classes_) == {"benign", "sqli", "xss"}

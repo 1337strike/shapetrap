@@ -364,7 +364,7 @@ class ValueSpace:
 def make_detector(kind: str, prep: str, cfg: dict, augment: bool = False, seed: int = 0):
     if kind == "sig":
         return Signature(prep)
-    if kind == "charcnn":
+    if kind in ("charcnn", "bert"):
         from .neural import make_neural
 
         return make_neural(kind, prep, cfg, seed)

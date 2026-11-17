@@ -1,0 +1,34 @@
+# Small transformer run: BERT-small fine-tuned on every benchmark source, next
+# to TF-IDF logistic regression on the same splits, with faithful rewrites.
+# Needs PyTorch and transformers, and downloads the model on first use.
+#
+#   shapetrap run --config bert.toml
+#   shapetrap validate --config bert.toml
+#   shapetrap report --config bert.toml
+#
+# A GPU makes this much faster (a free Kaggle or Colab T4 is enough); on a
+# laptop CPU it takes a night or two.  Reads the corpus and CRS verdicts from
+# out/ (or wherever base_out points) and writes to out-bert/.
+
+extends = "faithful.toml"
+out_dir = "out-bert"
+
+detectors = ["lr", "crs"]
+nonlinear_detectors = []
+preprocess = ["raw", "canon", "cstrip"]
+shape_augment = false
+shape_baseline = false
+neural_detectors = ["bert"]
+neural_preprocess = ["raw", "cstrip"]
+intervention_detectors = ["lr", "bert"]
+validate_configs = ["lr-raw", "lr-cstrip", "bert-raw", "bert-cstrip"]
+headline = "bert-raw"
+
+[bert]
+model = "google/bert_uncased_L-4_H-512_A-8"   # BERT-small, Turc et al. 2019
+max_tokens = 128
+epochs = 2
+batch_size = 32
+lr = 5e-5
+max_train = 0          # 0 = whole training split; e.g. 10000 for a quicker run
+device = "auto"        # auto | cpu | cuda
