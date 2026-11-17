@@ -24,6 +24,7 @@ def tb():
         ("<script>alert(1)</script>", "xss", True),
         ('"><img src=x onerror=alert(1)>', "xss", True),
         ("hello world", "xss", False),
+        ('<![<CDATA[C%Ada b="c"', "xss", True),  # malformed declaration
         ("../../etc/passwd", "traversal", True),
         ("images/a.png", "traversal", False),
         ("; cat /etc/passwd", "cmdi", True),

@@ -147,8 +147,15 @@ def _page(v: str) -> str:
 
 def _structure(html: str) -> list[tuple]:
     p = _Elements()
-    p.feed(html)
-    p.close()
+    try:
+        p.feed(html)
+        p.close()
+    except Exception:  # noqa: BLE001
+        # Python's HTML parser gives up on some malformed markup, such as the
+        # declaration "<![<CDATA[" (an AssertionError in recent 3.12 and 3.13
+        # releases).  Only unescaped input can trigger this, since the escaped
+        # page has no "<", so the value did put markup into the page.
+        return [("unparsable",)]
     return p.found
 
 
