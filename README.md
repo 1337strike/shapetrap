@@ -14,7 +14,7 @@ Everything runs on a CPU. No GPU, no containers, no network traffic is generated
 
 - **Cross-dataset transfer matrix.** Train on one source, test on every source, with family-grouped splits, a leakage purge per cell, and several seeds.
 - **Six learners on the same features.** Logistic regression, naive Bayes, linear SVM, random forest, LightGBM, and a one-hidden-layer MLP.
-- **Character-level model (optional).** A small byte-level CNN in PyTorch goes through the same transfer cells, container rewrites, and thresholds, to check whether a model that reads characters instead of word tokens falls into the same trap.
+- **Neural models (optional).** A small byte-level CNN and a fine-tuned BERT-small go through the same transfer cells, container rewrites, and thresholds, to check whether models that read characters or word pieces fall into the same trap.
 - **Shape-only interventions.** The same test inputs are re-sent as bare values, as `key=value`, and as JSON, on every seed. A decision that changes can only be caused by the container.
 - **Confirmed evasions.** Rewritten attacks are sent to a small in-process reference application (vulnerable SQLite queries, an unescaped HTML template, a file path, a parsed shell line) to count which changed decisions still carry a working attack.
 - **Shape-only baseline.** A model that sees nothing but the container (its type and the number of `key=value` pairs) is trained on every source, to show how far the shape alone gets.
@@ -67,14 +67,14 @@ shapetrap fetch      # download the 14 public source repositories into data/raw 
 shapetrap env        # are the installed packages the ones in requirements.lock?
 shapetrap anchor     # sanity check: must reproduce a known reference result exactly
 shapetrap all        # build -> audit -> crs -> run -> probe -> explain -> report
-pytest               # 81 tests
+pytest               # 82 tests
 ```
 
 The result is `out/REPORT.md`. A full run takes about two and a half to three hours on a laptop CPU (Intel Core i7-10610U, 16 GB RAM); the `run` step is most of it. Set `intervention_seeds = "first"` in `shapetrap.toml` to cut it back to about two hours.
 
 `fetch` checks out every repository at a pinned commit and, for large repositories, only the folders that are used.
 
-### Character-level run
+### Neural runs
 
 `charcnn.toml` extends `shapetrap.toml` and trains the byte CNN next to logistic regression on exactly the same splits. It reads the corpus and the CRS verdicts of the main run from `out/`, so run the main pipeline (at least `build`, and `crs` if you want the CRS reference) first:
 
@@ -86,6 +86,15 @@ shapetrap report --config charcnn.toml
 Results go to `out-charcnn/`; `out/` is not touched. On the laptop above, training takes under a minute per model and the full run (3 seeds, `raw`, `canon`, `cstrip`, container rewrites) takes a few hours, mostly scoring the held-out sources. The network settings are in the `[charcnn]` table of `charcnn.toml`.
 
 The model reads UTF-8 bytes, so it needs no tokenizer. Strings longer than `max_len` bytes keep their first and last halves, so a payload at the end of a long query string is still seen. `vmil` is not supported for this model.
+
+`bert.toml` fine-tunes BERT-small (`google/bert_uncased_L-4_H-512_A-8`, 4 layers, about 29M parameters) on every benchmark source with `raw` and `cstrip` input, next to logistic regression, with faithful rewrites. It needs `pip install torch transformers` and downloads the model on first use; any Hugging Face checkpoint or local folder can be set as `model` in the `[bert]` table. On a GPU (a free Kaggle or Colab T4 is enough) the full run takes a few hours; on a laptop CPU, a night or two. `max_train = 10000` trains on a stratified subsample for a quicker run. On a GPU it runs in mixed precision, so results can differ slightly from a CPU run.
+
+To run it on Kaggle or Colab, copy `out/corpus/` and `out/crs/` from your machine (or run `fetch`, `build` and, if libmodsecurity is available, `crs` there), then:
+
+```bash
+pip install -e . torch transformers
+shapetrap run --config bert.toml && shapetrap validate --config bert.toml && shapetrap report --config bert.toml
+```
 
 ## Commands
 
@@ -339,7 +348,7 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 
 ## Limitations
 
-- Six learners use the same TF-IDF token features; the optional byte CNN is the only character-level model. Transformers are not covered.
+- Six learners use the same TF-IDF token features. The optional neural models are one byte CNN and one small transformer (BERT-small); larger or code-specific transformers are not covered.
 - The CRS runs outside a web server, on synthetic requests with minimal headers. This approximates a real deployment; it does not equal one.
 - Interventions move the payload between containers without mutating it. `validate` checks rewritten attacks against a small reference application, not against real applications or frameworks with their own parsing quirks.
 - Removing the container also removes context that can matter, such as an unexpected parameter name.
@@ -354,7 +363,6 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 
 ## Roadmap
 
-- Small transformer models.
 - Deterministic tie-breaking at the vocabulary cut-off.
 - More containers: multipart, XML, nested.
 - Loaders for CyberLab honeynet, COW160x4, and SR-BH 2020.
