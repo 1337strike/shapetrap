@@ -10,6 +10,7 @@ import sys
 import time
 import tomllib
 import zipfile
+from collections import Counter, defaultdict
 from pathlib import Path
 
 DEFAULTS = {
@@ -493,6 +494,125 @@ def cmd_anchor(args, cfg, base, out):
     print("anchor check passed: the reference numbers are reproduced exactly")
 
 
+def cmd_label_sample(args, cfg, base, out):
+    """Draw a random sample of held-out strings for two people to label."""
+    from .annotate import draw_sample, write_sample
+    from .datasets import held_out_sources
+
+    corpus = _corpus(cfg, out)
+    # Curated payload lists are attacks by construction; the labels matter for
+    # the wild sources (honeypots and server logs).  `label_sources` overrides.
+    held = cfg.get("label_sources") or [
+        n
+        for n in corpus
+        if n in held_out_sources(cfg) and cfg["datasets"][n].get("group", "").startswith("wild")
+    ]
+    sample = draw_sample(corpus, held, args.n, cfg["seed"])
+    path = write_sample(sample, out / "labels")
+    per = Counter((r["source"], r["recorded_class"]) for r in sample)
+    print(f"  {len(sample)} strings from {len(held)} held-out sources -> {path}")
+    for (name, y), k in sorted(per.items()):
+        print(f"    {name:12s} {y:7s} {k}")
+    print(f"  Label sample_blind.csv (or sample.csv) following {out / 'labels' / 'GUIDE.md'}")
+
+
+def cmd_label_score(args, cfg, base, out):
+    """Agreement between the two labelers, then every detector on the agreed labels."""
+    import numpy as np
+
+    from .annotate import agreement, final_label, read_labels, score_flags
+    from .datasets import held_out_sources, split_all
+    from .models import config_name, make_detector
+    from .tables import write_csv
+
+    folder = out / "labels"
+    rows = read_labels(folder / "sample.csv")
+    blind = folder / "sample_blind.csv"
+    if blind.exists():
+        # Labels may have been written in the blind copy; merge them by id.
+        extra = {r["id"]: r for r in read_labels(blind)}
+        for r in rows:
+            for col in ("label_a", "label_b", "label_final", "note"):
+                if not r.get(col) and extra.get(r["id"], {}).get(col):
+                    r[col] = extra[r["id"]][col]
+    table, disagree = agreement(rows)
+    write_csv(table, folder / "agreement.csv")
+    write_csv(disagree, folder / "disagreements.csv")
+    top = table[0]
+    print(
+        f"  labeled by both: {top['n']} of {len(rows)}; agreement {top['agree']}, "
+        f"Cohen's kappa {top['kappa']} (injection vs rest {top['kappa_injection_vs_rest']})"
+    )
+    print(f"  {len(disagree)} disagreements -> {folder / 'disagreements.csv'}")
+    done = [r for r in rows if final_label(r)]
+    if not done:
+        print("  no settled labels yet; nothing to score")
+        return
+    labels = [final_label(r) for r in done]
+    texts = [r["text"] for r in done]
+    print(
+        f"  scoring {len(done)} settled labels: "
+        + ", ".join(f"{k} {v}" for k, v in sorted(Counter(labels).items()))
+    )
+
+    corpus = _corpus(cfg, out)
+    held = held_out_sources(cfg)
+    seed = cfg["seeds"][0]
+    splits = split_all(cfg, corpus, seed)
+    results = []
+    if all("crs1" in rows_[0] for rows_ in corpus.values() if rows_):
+        verdict = {}
+        for name in held:
+            for r in corpus.get(name, []):
+                verdict[r["text"]] = (r["crs1"], r["crs2"])
+        for lvl in (1, 2):
+            flags = np.array([bool(verdict.get(t, (False, False))[lvl - 1]) for t in texts])
+            results.append({"config": f"crs-pl{lvl}", "source": "-", **score_flags(labels, flags)})
+    kinds = [k for k in cfg["detectors"] if k not in ("sig", "crs")]
+    configs = [(k, p) for k in kinds for p in cfg["preprocess"] if p != "vmil"]
+    configs += [
+        (k, p)
+        for k in cfg.get("neural_detectors", [])
+        for p in cfg.get("neural_preprocess", [])
+        if p in ("raw", "canon", "cstrip")
+    ]
+    for src in corpus:
+        if src in held:
+            continue
+        train = splits[src][0]
+        if len({r["y"] for r in train}) < 2:
+            continue
+        xtr, ytr = [r["text"] for r in train], [r["atype"] for r in train]
+        for kind, prep in configs:
+            det = make_detector(kind, prep, cfg, seed=seed).fit(xtr, ytr)
+            flags = np.asarray(det.predict(texts), dtype=object) != "benign"
+            results.append(
+                {
+                    "config": config_name(kind, prep, False),
+                    "source": src,
+                    **score_flags(labels, flags),
+                }
+            )
+    write_csv(results, folder / "detector_scores.csv")
+    print(f"  per training source -> {folder / 'detector_scores.csv'}")
+    print(
+        f"  {'config':16s} {'injection flagged':>18s} {'benign flagged':>15s} {'other malicious':>16s}"
+    )
+    by = defaultdict(list)
+    for r in results:
+        by[r["config"]].append(r)
+    for name, rs in by.items():
+
+        def mean(col, rs=rs):
+            v = [x[col] for x in rs if x[col] != ""]
+            return f"{100 * sum(v) / len(v):.1f}%" if v else "-"
+
+        print(
+            f"  {name:16s} {mean('flagged_injection'):>18s} {mean('flagged_benign'):>15s} "
+            f"{mean('flagged_other_malicious'):>16s}"
+        )
+
+
 COMMANDS = {
     "fetch": cmd_fetch,
     "build": cmd_build,
@@ -506,6 +626,8 @@ COMMANDS = {
     "all": cmd_all,
     "anchor": cmd_anchor,
     "env": cmd_env,
+    "label-sample": cmd_label_sample,
+    "label-score": cmd_label_score,
 }
 
 
@@ -514,6 +636,7 @@ def main(argv=None):
     ap.add_argument("command", choices=list(COMMANDS))
     ap.add_argument("--config", default="shapetrap.toml")
     ap.add_argument("--out", default=None, help="output directory (overrides the config)")
+    ap.add_argument("--n", type=int, default=400, help="label-sample: number of strings")
     args = ap.parse_args(argv)
     cfg, base = load_config(Path(args.config))
     out = Path(args.out) if args.out else base / cfg["out_dir"]
