@@ -90,6 +90,8 @@ The model reads UTF-8 bytes, so it needs no tokenizer. Strings longer than `max_
 
 `bert.toml` fine-tunes BERT-small (`google/bert_uncased_L-4_H-512_A-8`, 4 layers, about 29M parameters) on every benchmark source with `raw` and `cstrip` input, next to logistic regression, with faithful rewrites. It needs `pip install torch transformers` and downloads the model on first use; any Hugging Face checkpoint or local folder can be set as `model` in the `[bert]` table. On a GPU (a free Kaggle or Colab T4 is enough) the full run takes a few hours; on a laptop CPU, a night or two. `max_train = 10000` trains on a stratified subsample for a quicker run. On a GPU it runs in mixed precision, so results can differ slightly from a CPU run.
 
+Runs save every finished (seed, training source) pair under `progress/` in the output folder. If a run is interrupted, start the same command again and it continues where it stopped; a changed configuration starts fresh. `bert-quick.toml` is a ten-minute check (one seed, raw input, 3,000 training strings) to run first.
+
 To run it on Kaggle or Colab, copy `out/corpus/` and `out/crs/` from your machine (or run `fetch`, `build` and, if libmodsecurity is available, `crs` there), then:
 
 ```bash
