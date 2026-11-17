@@ -25,6 +25,8 @@ DEFAULTS = {
     "mil_rounds": 2,
     "nonlinear_detectors": ["rf", "gbm", "mlp"],
     "nonlinear_preprocess": ["raw", "canon", "cstrip"],
+    "neural_detectors": [],
+    "neural_preprocess": ["raw", "canon", "cstrip"],
     "crs_path": "data/raw/coreruleset",
     "crs_workers": 2,
     "shape_augment": True,
@@ -138,9 +140,23 @@ SOURCES = [
 ]
 
 
-def load_config(path: Path) -> tuple[dict, Path]:
+def _read_config(path: Path) -> dict:
     with open(path, "rb") as fh:
         user = tomllib.load(fh)
+    here = path.resolve().parent
+    if "extends" in user:
+        # A config can extend another one (path relative to its own folder) and
+        # override single keys, so an extra run does not copy every source.
+        user = {**_read_config(here / user.pop("extends")), **user}
+    if "base_out" in user:
+        # Read the corpus and the CRS verdicts from another run's output folder,
+        # so an extra run uses exactly the same strings.
+        user["base_out"] = str((here / user["base_out"]).resolve())
+    return user
+
+
+def load_config(path: Path) -> tuple[dict, Path]:
+    user = _read_config(path)
     cfg = {**DEFAULTS, **user}
     if "datasets" not in cfg or not cfg["datasets"]:
         raise SystemExit("config has no [datasets.*] entries")
@@ -198,11 +214,12 @@ def cmd_build(args, cfg, base, out):
 def _corpus(cfg, out, audit=False):
     from .datasets import load_corpus
 
-    corpus = load_corpus(cfg, out, audit=audit)
+    src = Path(cfg["base_out"]) if cfg.get("base_out") else out
+    corpus = load_corpus(cfg, src, audit=audit)
     if not audit:
         from . import crs
 
-        crs.attach(corpus, out)  # no-op unless `shapetrap crs` has been run
+        crs.attach(corpus, src)  # no-op unless `shapetrap crs` has been run
     return corpus
 
 
@@ -261,10 +278,11 @@ def cmd_render(args, cfg, base, out):
     names = list(corpus)
     held = held_out_sources(cfg)
     groups = None
-    if (out / "audit_overlap.csv").exists():
+    overlap = (Path(cfg["base_out"]) if cfg.get("base_out") else out) / "audit_overlap.csv"
+    if overlap.exists():
         from .audit import provenance_groups
 
-        groups, _ = provenance_groups(read_typed_csv(out / "audit_overlap.csv"), names, held)
+        groups, _ = provenance_groups(read_typed_csv(overlap), names, held)
     md3 = report_transfer(
         summary, names, cfg["headline"], configs, held, groups, cfg.get("robustness_exclude", [])
     )

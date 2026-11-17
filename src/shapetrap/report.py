@@ -747,8 +747,10 @@ def report_remedies(
     that the direction does not depend on the classifier.
     """
     bench = [n for n in names if n not in held]
-    kinds = [k for k in cfg["detectors"] if k not in ("sig", "crs")] + list(
-        cfg.get("nonlinear_detectors", [])
+    kinds = (
+        [k for k in cfg["detectors"] if k not in ("sig", "crs")]
+        + list(cfg.get("nonlinear_detectors", []))
+        + list(cfg.get("neural_detectors", []))
     )
     have = {r["config"] for r in summary}
     with_control = [h for h in names if h in held and any(r["y"] == "benign" for r in corpus[h])]
