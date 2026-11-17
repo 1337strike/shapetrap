@@ -14,6 +14,7 @@ Everything runs on a CPU. No GPU, no containers, no network traffic is generated
 
 - **Cross-dataset transfer matrix.** Train on one source, test on every source, with family-grouped splits, a leakage purge per cell, and several seeds.
 - **Six learners on the same features.** Logistic regression, naive Bayes, linear SVM, random forest, LightGBM, and a one-hidden-layer MLP.
+- **Character-level model (optional).** A small byte-level CNN in PyTorch goes through the same transfer cells, container rewrites, and thresholds, to check whether a model that reads characters instead of word tokens falls into the same trap.
 - **Shape-only interventions.** The same test inputs are re-sent as bare values, as `key=value`, and as JSON, on every seed. A decision that changes can only be caused by the container.
 - **Shape-only baseline.** A model that sees nothing but the container (its type and the number of `key=value` pairs) is trained on every source, to show how far the shape alone gets.
 - **Equal-FPR comparison.** AUC and detection at a fixed 1% and 5% false-positive rate, so detectors with different thresholds can be compared fairly.
@@ -49,6 +50,12 @@ pip install -e . --no-deps
 shapetrap env        # checks the installed packages against requirements.lock
 ```
 
+The character-level model needs PyTorch. A CPU build is enough and much smaller than the default download:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
 Without `gcc` or libmodsecurity the `crs` step is skipped with a message, and the local signature set is used as the reference instead.
 
 ## Quick start
@@ -58,12 +65,25 @@ shapetrap fetch      # download the 14 public source repositories into data/raw 
 shapetrap env        # are the installed packages the ones in requirements.lock?
 shapetrap anchor     # sanity check: must reproduce a known reference result exactly
 shapetrap all        # build -> audit -> crs -> run -> probe -> explain -> report
-pytest               # 52 tests
+pytest               # 57 tests
 ```
 
 The result is `out/REPORT.md`. A full run takes about two and a half to three hours on a laptop CPU (Intel Core i7-10610U, 16 GB RAM); the `run` step is most of it. Set `intervention_seeds = "first"` in `shapetrap.toml` to cut it back to about two hours.
 
 `fetch` checks out every repository at a pinned commit and, for large repositories, only the folders that are used.
+
+### Character-level run
+
+`charcnn.toml` extends `shapetrap.toml` and trains the byte CNN next to logistic regression on exactly the same splits. It reads the corpus and the CRS verdicts of the main run from `out/`, so run the main pipeline (at least `build`, and `crs` if you want the CRS reference) first:
+
+```bash
+shapetrap run --config charcnn.toml
+shapetrap report --config charcnn.toml
+```
+
+Results go to `out-charcnn/`; `out/` is not touched. On the laptop above, training takes under a minute per model and the full run (3 seeds, `raw`, `canon`, `cstrip`, container rewrites) takes a few hours, mostly scoring the held-out sources. The network settings are in the `[charcnn]` table of `charcnn.toml`.
+
+The model reads UTF-8 bytes, so it needs no tokenizer. Strings longer than `max_len` bytes keep their first and last halves, so a payload at the end of a long query string is still seen. `vmil` is not supported for this model.
 
 ## Commands
 
@@ -83,6 +103,8 @@ The result is `out/REPORT.md`. A full run takes about two and a half to three ho
 | `env` | Compare the installed packages with `requirements.lock`. Exits with an error on any difference | terminal |
 
 Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
+
+A config file can start with `extends = "other.toml"` and override single keys, and `base_out = "out"` makes a run read its corpus and CRS verdicts from another output folder.
 
 ## How it works
 
@@ -271,7 +293,7 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 
 ## Limitations
 
-- All six learners use the same TF-IDF token features. Character-level models and transformers are not covered.
+- Six learners use the same TF-IDF token features; the optional byte CNN is the only character-level model. Transformers are not covered.
 - The CRS runs outside a web server, on synthetic requests with minimal headers. This approximates a real deployment; it does not equal one.
 - Interventions move the payload between containers without mutating it, and rewritten attacks are not run against an application, so a changed decision is not proof of a working evasion.
 - Removing the container also removes context that can matter, such as an unexpected parameter name.
@@ -286,7 +308,7 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 
 ## Roadmap
 
-- Character-level and small transformer models.
+- Small transformer models.
 - Deterministic tie-breaking at the vocabulary cut-off.
 - More containers: multipart, XML, nested.
 - Loaders for CyberLab honeynet, COW160x4, and SR-BH 2020.
