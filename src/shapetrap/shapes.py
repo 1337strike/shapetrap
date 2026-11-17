@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from urllib.parse import unquote_plus
 
 SHAPES = ("empty", "kv", "json", "path", "bare")
 
@@ -173,6 +174,84 @@ def as_json(text: str, seed: int = 0) -> str:
 
 
 INTERVENTIONS = {"bare": as_bare, "kv": as_kv, "json": as_json}
+
+
+# Faithful rewrites.  The literal rewrites above copy values exactly as they
+# were stored, so a percent-encoded query string such as ``q=%27%20or%201=1``
+# becomes the JSON string "%27%20or%201=1", which no client would send and no
+# server would decode.  The faithful variants produce what a client would
+# actually send: values are decoded the way a framework parses a form body
+# before they go into JSON or a bare value, and a value put behind a key is
+# encoded just enough (``%``, ``&``, ``+``) to survive parsing unchanged.
+
+
+def _decoded_pairs(text: str, seed: int) -> list[tuple[str, str]]:
+    s = text.strip()
+    pairs = split_kv(s)
+    if pairs is not None:
+        return [(unquote_plus(k), unquote_plus(v)) for k, v in pairs]
+    if detect_shape(s) == "json":
+        obj = json.loads(s)
+        if isinstance(obj, dict):
+            out: list[tuple[str, str]] = []
+            for k, v in obj.items():
+                items = v if isinstance(v, list) else [v]
+                for item in items:
+                    if isinstance(item, (dict, list)):
+                        out.append((str(k), json.dumps(item, ensure_ascii=False)))
+                    elif item is not None:
+                        out.append((str(k), item if isinstance(item, str) else json.dumps(item)))
+            return out
+        return [(_neutral_key(text, seed), v) for v in values_of(s)]
+    return [(_neutral_key(text, seed), text)]
+
+
+def _form_quote(value: str) -> str:
+    return value.replace("%", "%25").replace("&", "%26").replace("+", "%2B")
+
+
+def as_bare_faithful(text: str, seed: int = 0) -> str:
+    """The decoded values, without keys or separators."""
+    if detect_shape(text) not in ("kv", "json"):
+        return text
+    return " ".join(v for _, v in _decoded_pairs(text, seed) if v)
+
+
+def as_kv_faithful(text: str, seed: int = 0) -> str:
+    """A non-kv input as one form field, encoded so that parsing returns it."""
+    if split_kv(text.strip()) is not None:
+        return text
+    if detect_shape(text) == "json":
+        pairs = _decoded_pairs(text, seed)
+        return "&".join(f"{k}={_form_quote(v)}" for k, v in pairs)
+    return f"{_neutral_key(text, seed)}={_form_quote(text)}"
+
+
+def as_json_faithful(text: str, seed: int = 0) -> str:
+    """The decoded keys and values as a flat JSON object."""
+    if detect_shape(text) == "json":
+        return text
+    obj: dict = {}
+    for key, value in _decoded_pairs(text, seed):
+        if key in obj:
+            obj[key] = (obj[key] if isinstance(obj[key], list) else [obj[key]]) + [value]
+        else:
+            obj[key] = value
+    return json.dumps(obj, ensure_ascii=False)
+
+
+FAITHFUL_INTERVENTIONS = {"bare": as_bare_faithful, "kv": as_kv_faithful, "json": as_json_faithful}
+
+
+def interventions(cfg: dict) -> dict:
+    """The rewrites a run uses: ``rewrite = "literal"`` (default, the
+    published results) or ``"faithful"``."""
+    mode = cfg.get("rewrite", "literal")
+    if mode == "literal":
+        return INTERVENTIONS
+    if mode == "faithful":
+        return FAITHFUL_INTERVENTIONS
+    raise SystemExit(f"rewrite must be 'literal' or 'faithful', not {mode!r}")
 
 
 def shape_features(text: str) -> list[float]:

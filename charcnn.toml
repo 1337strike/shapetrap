@@ -1,0 +1,32 @@
+# Character-level run: a byte CNN next to TF-IDF logistic regression, on the
+# same splits, rewrites and held-out sources as shapetrap.toml.
+#
+#   pip install -e '.[deep]'        (or the CPU-only torch wheel, see README)
+#   shapetrap run --config charcnn.toml
+#
+# Results go to out-charcnn/; out/ is not touched.
+
+extends = "shapetrap.toml"
+out_dir = "out-charcnn"
+base_out = "out"             # corpus and CRS verdicts of the main run
+
+detectors = ["lr", "crs"]    # LR as the reference on identical splits
+nonlinear_detectors = []
+preprocess = ["raw", "canon", "cstrip"]
+shape_augment = false
+shape_baseline = false
+neural_detectors = ["charcnn"]
+neural_preprocess = ["raw", "canon", "cstrip"]
+intervention_detectors = ["lr", "charcnn"]
+headline = "charcnn-raw"
+
+[charcnn]
+max_len = 512                # bytes per string; longer strings keep head and tail
+emb = 32
+filters = 128
+kernels = [3, 5, 7]
+dropout = 0.2
+epochs = 4
+batch_size = 256
+lr = 0.001
+threads = 0                  # 0 = min(4, CPU count)

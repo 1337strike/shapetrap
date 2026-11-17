@@ -34,6 +34,7 @@ from .models import (
     preprocess,
 )
 from .shapes import INTERVENTIONS, shape_features
+from .shapes import interventions as rewrites_for
 from .stats import holm, mcnemar_exact, mean_sd, wilson
 from .tables import write_csv
 
@@ -166,6 +167,8 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
     kinds = [k for k in cfg["detectors"] if k not in ("sig", "crs")]
     nl_kinds = list(cfg.get("nonlinear_detectors", []))
     nl_preps = set(cfg.get("nonlinear_preprocess", []))
+    nn_kinds = list(cfg.get("neural_detectors", []))
+    nn_preps = [p for p in cfg.get("neural_preprocess", ["raw", "canon", "cstrip"]) if p != "vmil"]
     # Real CRS verdicts, when `shapetrap crs` has produced them, are both a
     # detector of their own and the reference for explicit injection syntax.
     has_crs = all("crs1" in r for rows in corpus.values() for r in rows[:1])
@@ -181,6 +184,9 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
         else {int(s) for s in iv_seeds}
     )
     shape_base = cfg.get("shape_baseline", False)
+    rewrite_fns = rewrites_for(cfg)
+    # Learned configurations to combine with the CRS (paranoia level 1).
+    hybrids = set(cfg.get("hybrid_configs", []))
     cells: list[dict] = []
     interventions: list[dict] = []
     t0 = time.time()
@@ -246,7 +252,7 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                     }
                 if iv_here:
                     v["vtexts"] = {
-                        name: [fn(t, seed) for t in texts] for name, fn in INTERVENTIONS.items()
+                        name: [fn(t, seed) for t in texts] for name, fn in rewrite_fns.items()
                     }
                     v["changed"] = {
                         name: np.array([a != b for a, b in zip(texts, vt)], dtype=bool)
@@ -279,6 +285,16 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                     )
                 )
                 cells.append(row)
+                if name in hybrids and "crs" in v:
+                    # Value classifier combined with the rule set, which parses
+                    # the request into arguments itself.  Scores keep the
+                    # learned ranking inside each CRS verdict, so thresholds
+                    # still apply: AND puts every CRS pass below every CRS
+                    # block, OR puts every CRS block above every pass.
+                    c = v["crs"][1]
+                    s = score if score is not None else flag.astype(float)
+                    record(f"and-{name}", tgt, flag & c, known, np.where(c, s, s - 2.0))
+                    record(f"or-{name}", tgt, flag | c, known, np.where(c, s + 2.0, s))
 
             if "sig" in cfg["detectors"]:
                 for prep in [p for p in cfg["preprocess"] if p in SIGNATURE_PREPS]:
@@ -297,7 +313,7 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                         flag = view[tgt]["crs"][lvl]
                         record(f"crs-pl{lvl}", tgt, flag, np.ones(len(flag), dtype=bool))
 
-            want_iv = iv_here and any(k in iv_kinds for k in kinds + nl_kinds)
+            want_iv = iv_here and any(k in iv_kinds for k in kinds + nl_kinds + nn_kinds)
             if "vmil" in cfg["preprocess"]:
                 space = ValueSpace(
                     cfg.get("tokenizer", "web"),
@@ -366,6 +382,32 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                                 vflags = {
                                     vn: np.asarray(clf.predict(XV[(tgt, vn)]), dtype=object)
                                     != "benign"
+                                    for vn in INTERVENTIONS
+                                }
+                                _intervene(
+                                    interventions,
+                                    flag,
+                                    vflags,
+                                    view[tgt]["changed"],
+                                    view[tgt]["is_attack"],
+                                    {"seed": seed, "source": src, "target": tgt, "config": name},
+                                )
+            if nn_kinds:
+                from .neural import make_neural
+
+                for kind in nn_kinds:
+                    for prep in nn_preps:
+                        det = make_neural(kind, prep, cfg, seed).fit(xtr, ytr)
+                        name = config_name(kind, prep, False)
+                        log(f"    {name}: trained in {det.train_seconds:.0f}s")
+                        for tgt in names:
+                            texts = view[tgt]["texts"]
+                            pred, score = det.predict_and_score(texts)
+                            flag = pred != "benign"
+                            record(name, tgt, flag, det.known_mask(texts), score)
+                            if want_iv and kind in iv_kinds:
+                                vflags = {
+                                    vn: det.predict(view[tgt]["vtexts"][vn]) != "benign"
                                     for vn in INTERVENTIONS
                                 }
                                 _intervene(
