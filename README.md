@@ -22,6 +22,7 @@ Everything runs on a CPU. No GPU, no containers, no network traffic is generated
 - **Container canonicalization.** Two preprocessing modes that remove the container before classification (`cstrip`, `vmil`).
 - **Real OWASP CRS baseline.** Every string is scored by the Core Rule Set through libmodsecurity at paranoia levels 1 and 2.
 - **Held-out sources.** Payload lists and SSH/web honeypot logs that are never trained on, with attempted credentials as a non-injection control.
+- **Manual labels for honeypot data.** Draw a stratified sample, have two people label it, get Cohen's kappa, and score every detector on the agreed labels.
 - **Statistics included.** Wilson intervals, exact McNemar tests with Holm correction, exact Wilcoxon signed-rank tests, and source-level bootstrap intervals.
 - **One report.** All tables end up in `out/REPORT.md`, with the raw numbers as CSV next to it.
 
@@ -65,7 +66,7 @@ shapetrap fetch      # download the 14 public source repositories into data/raw 
 shapetrap env        # are the installed packages the ones in requirements.lock?
 shapetrap anchor     # sanity check: must reproduce a known reference result exactly
 shapetrap all        # build -> audit -> crs -> run -> probe -> explain -> report
-pytest               # 57 tests
+pytest               # 61 tests
 ```
 
 The result is `out/REPORT.md`. A full run takes about two and a half to three hours on a laptop CPU (Intel Core i7-10610U, 16 GB RAM); the `run` step is most of it. Set `intervention_seeds = "first"` in `shapetrap.toml` to cut it back to about two hours.
@@ -101,6 +102,8 @@ The model reads UTF-8 bytes, so it needs no tokenizer. Strings longer than `max_
 | `all` | Every step above except `fetch` | |
 | `anchor` | Sanity check: train on the `sqlixss-detector` corpus, test on HttpParamsDataset, and compare with the known reference numbers (97.03% of benign inputs flagged on raw input). Exits with an error if they are not reproduced exactly | terminal |
 | `env` | Compare the installed packages with `requirements.lock`. Exits with an error on any difference | terminal |
+| `label-sample` | Draw a random sample of held-out strings for manual labeling (`--n`, default 400) | `out/labels/sample.csv`, `GUIDE.md` |
+| `label-score` | Agreement between two labelers, then every detector scored on the agreed labels | `out/labels/agreement.csv`, `detector_scores.csv` |
 
 Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
 
@@ -136,6 +139,24 @@ A config file can start with `extends = "other.toml"` and override single keys, 
 - **Syntax reference.** There is no ground truth, so the report splits the strings into those the CRS blocks and those it does not, and shows how many of each the model flags.
 
 Log contents are only ever read as text. Nothing in them is executed.
+
+## Labeling honeypot inputs
+
+Honeypot and server-log sources have no confirmed injection labels, so by default the tool only reports how often a detector flags them. To measure real detection on them:
+
+```bash
+shapetrap label-sample --n 400
+```
+
+This writes `out/labels/sample.csv` (and `sample_blind.csv`, the same rows without source and recorded class), plus `GUIDE.md` with the label set: `benign`, `sqli`, `xss`, `cmdi`, `traversal`, `other_malicious`, `unclear`. The sample is drawn from the wild sources only (curated payload lists are attacks by construction), with an equal share for every combination of source and recorded class, so rare web attacks are not swamped by credential lists. The `weight` column turns sample rates back into estimates for a whole source. Set `label_sources = [...]` in the config to choose the sources yourself.
+
+Two people fill `label_a` and `label_b` independently, then:
+
+```bash
+shapetrap label-score
+```
+
+It prints the agreement and Cohen's kappa (overall, per source, and injection versus the rest), writes the rows they disagree on to `disagreements.csv`, and scores every configured detector and the CRS on the rows that have a settled label: share of injection flagged, share of benign flagged, and share of other malicious inputs flagged. Settle disagreements by writing `label_final` and run it again.
 
 ## Data sources
 
