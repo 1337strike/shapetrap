@@ -23,6 +23,7 @@ neural_preprocess = ["raw", "cstrip"]
 intervention_detectors = ["lr", "bert"]
 validate_configs = ["lr-raw", "lr-cstrip", "bert-raw", "bert-cstrip"]
 headline = "bert-raw"
+hybrid_configs = ["lr-cstrip", "bert-cstrip"]
 
 [bert]
 model = "google/bert_uncased_L-4_H-512_A-8"   # BERT-small, Turc et al. 2019

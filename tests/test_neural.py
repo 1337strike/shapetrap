@@ -158,3 +158,73 @@ def test_bert_detector_trains_on_a_local_model(tmp_path):
         texts, labels
     )
     assert set(sub.classes_) == {"benign", "sqli", "xss"}
+
+
+def _mini_corpus():
+    from shapetrap.shapes import detect_shape
+
+    rng = np.random.default_rng(1)
+    words = ["laptop", "shoes", "basket", "madrid", "anna", "red", "blue", "item", "cart", "box"]
+
+    def row(text, atype, crs1):
+        return {
+            "text": text,
+            "atype": atype,
+            "y": "benign" if atype == "benign" else "attack",
+            "key": text.lower(),
+            "family": text,
+            "shape": detect_shape(text),
+            "crs1": crs1,
+            "crs2": crs1,
+        }
+
+    a = [row(" ".join(rng.choice(words, 2)) + str(i), "benign", i % 17 == 0) for i in range(120)]
+    a += [row(f"{i}' or {i}={i}--", "sqli", True) for i in range(60)]
+    a += [row(f"<script>alert({i})</script>", "xss", i % 3 > 0) for i in range(60)]
+    b = [row(f"q={rng.choice(words)}{i}&page={i}", "benign", False) for i in range(120)]
+    b += [row(f"q=%27%20or%20{i}%3D{i}--&page=1", "sqli", i % 2 == 0) for i in range(60)]
+    h = [row(f"user{i}", "benign", False) for i in range(30)]
+    h += [row(f"id=1;cat /etc/passwd #{i}", "cmdi", True) for i in range(30)]
+    return {"a": a, "b": b, "h": h}
+
+
+def test_run_with_neural_hybrid_and_faithful_rewrites(tmp_path):
+    pytest.importorskip("torch")
+    from shapetrap.experiment import run_experiment
+
+    cfg = {
+        "seeds": [1],
+        "test_size": 0.3,
+        "tokenizer": "web",
+        "max_features": 4000,
+        "detectors": ["lr", "crs"],
+        "preprocess": ["raw", "cstrip"],
+        "nonlinear_detectors": [],
+        "shape_augment": False,
+        "interventions": True,
+        "intervention_detectors": ["lr", "charcnn"],
+        "intervention_seeds": "all",
+        "shape_baseline": False,
+        "neural_detectors": ["charcnn"],
+        "neural_preprocess": ["raw", "cstrip"],
+        "charcnn": SMALL,
+        "hybrid_configs": ["lr-cstrip"],
+        "rewrite": "faithful",
+        "datasets": {"a": {}, "b": {}, "h": {"role": "test"}},
+    }
+    cells, _, iv = run_experiment(cfg, _mini_corpus(), tmp_path, log=lambda *_: None)
+    configs = {c["config"] for c in cells}
+    assert {"lr-raw", "lr-cstrip", "charcnn-raw", "charcnn-cstrip", "crs-pl1"} <= configs
+    assert {"and-lr-cstrip", "or-lr-cstrip"} <= configs
+    by = {(c["source"], c["target"], c["config"]): c for c in cells}
+    for (src, tgt, name), c in by.items():
+        if name != "and-lr-cstrip":
+            continue
+        lr, crs = by[(src, tgt, "lr-cstrip")], by[(src, tgt, "crs-pl1")]
+        orc = by[(src, tgt, "or-lr-cstrip")]
+        for m in ("fpr", "det"):
+            if not np.isnan(c[m]):
+                assert c[m] <= min(lr[m], crs[m]) + 1e-12
+                assert orc[m] >= max(lr[m], crs[m]) - 1e-12
+    assert {r["config"] for r in iv} >= {"lr-raw", "charcnn-raw"}
+    assert (tmp_path / "transfer_summary.csv").exists()

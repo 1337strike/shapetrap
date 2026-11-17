@@ -401,6 +401,9 @@ def detector_grid(cfg: dict):
                 grid.append((kind, prep, False))
     if "crs" in cfg["detectors"]:
         grid += [("crs", "pl1", False), ("crs", "pl2", False)]
+        for name in cfg.get("hybrid_configs", []):
+            kind, _, prep = name.partition("-")
+            grid += [(f"and-{kind}", prep, False), (f"or-{kind}", prep, False)]
     if cfg.get("shape_baseline", False):
         grid.append(("shape", "lr", False))
     return grid

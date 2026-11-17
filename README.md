@@ -22,6 +22,7 @@ Everything runs on a CPU. No GPU, no containers, no network traffic is generated
 - **Integrity audit.** Overlap between sources at string, normalized-string, and value level, to find benchmarks that share benign values. Sources that overlap are grouped, and the main results are repeated with one member of each group at a time and with the group as the unit of the tests.
 - **Container canonicalization.** Two preprocessing modes that remove the container before classification (`cstrip`, `vmil`).
 - **Real OWASP CRS baseline.** Every string is scored by the Core Rule Set through libmodsecurity at paranoia levels 1 and 2.
+- **Hybrid detectors.** A container-free value classifier combined with the CRS, which parses the request into arguments itself: `and-…` flags only when both agree, `or-…` when either does.
 - **Held-out sources.** Payload lists and SSH/web honeypot logs that are never trained on, with attempted credentials as a non-injection control.
 - **Manual labels for honeypot data.** Draw a stratified sample, have two people label it, get Cohen's kappa, and score every detector on the agreed labels.
 - **Statistics included.** Wilson intervals, exact McNemar tests with Holm correction, exact Wilcoxon signed-rank tests, and source-level bootstrap intervals.
@@ -67,7 +68,7 @@ shapetrap fetch      # download the 14 public source repositories into data/raw 
 shapetrap env        # are the installed packages the ones in requirements.lock?
 shapetrap anchor     # sanity check: must reproduce a known reference result exactly
 shapetrap all        # build -> audit -> crs -> run -> probe -> explain -> report
-pytest               # 82 tests
+pytest               # 83 tests
 ```
 
 The result is `out/REPORT.md`. A full run takes about two and a half to three hours on a laptop CPU (Intel Core i7-10610U, 16 GB RAM); the `run` step is most of it. Set `intervention_seeds = "first"` in `shapetrap.toml` to cut it back to about two hours.
@@ -138,9 +139,10 @@ A config file can start with `extends = "other.toml"` and override single keys, 
    Example, `id=5&q=%27%20OR%201=1`: `raw` keeps it as is; `canon` gives `id=5&q=' or 1=1`; `cstrip` gives `5 ' or 1=1`; `vmil` scores `5` and `' or 1=1` separately.
 7. **Shape augmentation.** Each learned detector is also trained in a `+aug` variant that sees every training string in the other containers with the same label.
 8. **CRS baseline.** Each string is placed in an HTTP request that matches its container (key-value as query string, path as request target, JSON as body, anything else as the value of one parameter) and evaluated by libmodsecurity with the CRS rules. Nothing is sent over a network; the request only exists as arguments to the library.
-9. **Shape-only baseline.** `shape-lr` is a logistic regression on six numbers per input: one indicator per container type and the number of `key=value` pairs (capped at 8).
-10. **Uncertainty.** Wilson intervals per cell, 10,000 bootstrap resamples over training sources for cross-dataset means, and exact Wilcoxon signed-rank tests for remedy comparisons, both with the training source and with the provenance group as the unit.
-11. **Equal FPR.** For every scoring detector, each cell also reports AUC and the share of attacks flagged when the threshold is set on that cell's benign inputs so that 1% or 5% of them are flagged. The threshold uses the test labels, so these are best-case operating points.
+9. **Hybrids.** For every configuration in `hybrid_configs`, two more are scored from the same predictions: `and-<config>` (flagged by the configuration and by CRS paranoia level 1) and `or-<config>` (flagged by either). Their scores keep the learned ranking within each CRS verdict, so AUC and the equal-FPR detection still apply. CRS verdicts exist only for corpus strings, so hybrids have no container-rewrite results.
+10. **Shape-only baseline.** `shape-lr` is a logistic regression on six numbers per input: one indicator per container type and the number of `key=value` pairs (capped at 8).
+11. **Uncertainty.** Wilson intervals per cell, 10,000 bootstrap resamples over training sources for cross-dataset means, and exact Wilcoxon signed-rank tests for remedy comparisons, both with the training source and with the provenance group as the unit.
+12. **Equal FPR.** For every scoring detector, each cell also reports AUC and the share of attacks flagged when the threshold is set on that cell's benign inputs so that 1% or 5% of them are flagged. The threshold uses the test labels, so these are best-case operating points.
 
 ### Reading honeypot sources
 
