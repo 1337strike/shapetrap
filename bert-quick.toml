@@ -1,0 +1,15 @@
+# Ten-minute check before the full BERT run: one seed, raw input only, a
+# small training subsample.  If this finishes without errors, run bert.toml.
+#
+#   shapetrap run --config bert-quick.toml
+
+extends = "bert.toml"
+out_dir = "out-bert-quick"
+seeds = [42]
+neural_preprocess = ["raw"]
+hybrid_configs = []
+
+[bert]
+model = "google/bert_uncased_L-4_H-512_A-8"
+max_train = 3000
+epochs = 1

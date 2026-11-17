@@ -11,6 +11,8 @@ benign; which attack label it got does not matter for these metrics.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import time
 import warnings
@@ -161,6 +163,17 @@ def _intervene(rows_out, flag, vflags, changed, is_attack, meta):
             )
 
 
+def _plain(x):
+    """JSON form of NumPy scalars in saved progress."""
+    if isinstance(x, np.integer):
+        return int(x)
+    if isinstance(x, np.floating):
+        return float(x)
+    if isinstance(x, np.bool_):
+        return bool(x)
+    raise TypeError(type(x).__name__)
+
+
 def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=print):
     names = list(corpus)
     held = held_out_sources(cfg)
@@ -189,6 +202,12 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
     hybrids = set(cfg.get("hybrid_configs", []))
     cells: list[dict] = []
     interventions: list[dict] = []
+    # Finished (seed, training source) pairs are saved as they complete, so an
+    # interrupted run picks up where it stopped when started again with the
+    # same configuration.  A changed configuration gets a new folder.
+    key = json.dumps({k: v for k, v in cfg.items() if k != "out_dir"}, sort_keys=True, default=str)
+    progress = out_dir / "progress" / hashlib.sha256(key.encode()).hexdigest()[:12]
+    progress.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     # The MLP is stopped early by design, and LightGBM is given unnamed sparse
     # columns; neither message is informative here.
@@ -214,6 +233,14 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
             if len({r["y"] for r in train}) < 2:
                 log(f"  skip {src}: training split lacks one of the two classes")
                 continue
+            done_file = progress / f"{seed}-{src}.json"
+            if done_file.exists():
+                saved = json.loads(done_file.read_text(encoding="utf-8"))
+                cells.extend(saved["cells"])
+                interventions.extend(saved["interventions"])
+                log(f"  seed {seed} source {src}: resumed from {done_file.parent.name}")
+                continue
+            n_cells, n_iv = len(cells), len(interventions)
             train_keys = {r["key"] for r in train}
             xtr = [r["text"] for r in train]
             ytr = [r["atype"] for r in train]
@@ -437,6 +464,15 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                         np.ones(len(flag), dtype=bool),
                         attack_score(clf, Xs),
                     )
+            tmp = done_file.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps(
+                    {"cells": cells[n_cells:], "interventions": interventions[n_iv:]},
+                    default=_plain,
+                ),
+                encoding="utf-8",
+            )
+            tmp.replace(done_file)
             log(f"  seed {seed} source {src}: done ({time.time() - t0:.0f}s)")
 
     # Holm adjustment within each seed, configuration and class.
