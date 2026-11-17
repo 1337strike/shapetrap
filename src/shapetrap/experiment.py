@@ -34,6 +34,7 @@ from .models import (
     preprocess,
 )
 from .shapes import INTERVENTIONS, shape_features
+from .shapes import interventions as rewrites_for
 from .stats import holm, mcnemar_exact, mean_sd, wilson
 from .tables import write_csv
 
@@ -183,6 +184,7 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
         else {int(s) for s in iv_seeds}
     )
     shape_base = cfg.get("shape_baseline", False)
+    rewrite_fns = rewrites_for(cfg)
     cells: list[dict] = []
     interventions: list[dict] = []
     t0 = time.time()
@@ -248,7 +250,7 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                     }
                 if iv_here:
                     v["vtexts"] = {
-                        name: [fn(t, seed) for t in texts] for name, fn in INTERVENTIONS.items()
+                        name: [fn(t, seed) for t in texts] for name, fn in rewrite_fns.items()
                     }
                     v["changed"] = {
                         name: np.array([a != b for a, b in zip(texts, vt)], dtype=bool)

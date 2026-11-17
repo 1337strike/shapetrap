@@ -613,6 +613,104 @@ def cmd_label_score(args, cfg, base, out):
         )
 
 
+def cmd_validate(args, cfg, base, out):
+    """Which changed decisions are real evasions?  Rewritten attacks are sent
+    to a small in-process reference application (see testbed.py)."""
+    import numpy as np
+
+    from .datasets import held_out_sources, split_all
+    from .models import make_detector
+    from .shapes import interventions
+    from .tables import write_csv
+    from .testbed import Testbed
+
+    INTERVENTIONS = interventions(cfg)
+
+    corpus = _corpus(cfg, out)
+    held = held_out_sources(cfg)
+    bench = [n for n in corpus if n not in held]
+    seed = cfg["seeds"][0]
+    splits = split_all(cfg, corpus, seed)
+    tb = Testbed()
+    configs = cfg.get("validate_configs") or [cfg["headline"]]
+
+    # Attacks of every benchmark test split, and their rewrites, with the
+    # testbed verdict for each.  Independent of the detector.
+    attacks = {}
+    for tgt in bench:
+        rows = [r for r in splits[tgt][1] if r["y"] == "attack"]
+        texts = [r["text"] for r in rows]
+        types = [r["atype"] for r in rows]
+        a = {
+            "texts": texts,
+            "native_ok": np.array([tb.effective(t, k) for t, k in zip(texts, types)]),
+        }
+        for vn, fn in INTERVENTIONS.items():
+            vt = [fn(t, seed) for t in texts]
+            a[vn] = {
+                "texts": vt,
+                "changed": np.array([x != y for x, y in zip(texts, vt)]),
+                "ok": np.array([tb.effective(t, k) for t, k in zip(vt, types)]),
+            }
+        attacks[tgt] = a
+        print(f"  {tgt}: {len(texts)} attacks, {a['native_ok'].mean():.1%} effective as collected")
+
+    rows_out = []
+    for name in configs:
+        kind, _, prep = name.partition("-")
+        if "+" in prep:
+            raise SystemExit(f"validate: augmented configurations are not supported ({name})")
+        for src in bench:
+            train = splits[src][0]
+            if len({r["y"] for r in train}) < 2:
+                continue
+            det = make_detector(kind, prep, cfg, seed=seed).fit(
+                [r["text"] for r in train], [r["atype"] for r in train]
+            )
+            for tgt in bench:
+                a = attacks[tgt]
+                if not a["texts"]:
+                    continue
+                native = np.asarray(det.predict(a["texts"]), dtype=object) != "benign"
+                for vn in INTERVENTIONS:
+                    v = a[vn]
+                    m = v["changed"] & a["native_ok"]
+                    if not m.any():
+                        continue
+                    variant = np.asarray(det.predict(v["texts"]), dtype=object) != "benign"
+                    lost = m & native & ~variant
+                    rows_out.append(
+                        {
+                            "config": name,
+                            "source": src,
+                            "target": tgt,
+                            "variant": vn,
+                            "n": int(m.sum()),
+                            "still_effective": round(float(v["ok"][m].mean()), 4),
+                            "detected_native": round(float(native[m].mean()), 4),
+                            "detected_variant": round(float(variant[m].mean()), 4),
+                            "lost": int(lost.sum()),
+                            "confirmed_evasions": int((lost & v["ok"]).sum()),
+                        }
+                    )
+        print(f"  {name}: done")
+    write_csv(rows_out, out / "validation.csv")
+    print(f"  -> {out / 'validation.csv'}")
+    print(f"  rewrites: {cfg.get('rewrite', 'literal')}")
+    print(f"  {'config':14s} {'rewrite':7s} {'still works':>12s} {'lost':>7s} {'confirmed':>10s}")
+    for name in configs:
+        for vn in INTERVENTIONS:
+            rs = [r for r in rows_out if r["config"] == name and r["variant"] == vn]
+            if not rs:
+                continue
+            n = sum(r["n"] for r in rs)
+            ok = sum(r["still_effective"] * r["n"] for r in rs) / n
+            lost = sum(r["lost"] for r in rs)
+            conf = sum(r["confirmed_evasions"] for r in rs)
+            share = f"{conf / lost:.1%}" if lost else "-"
+            print(f"  {name:14s} {vn:7s} {ok:>12.1%} {lost:>7d} {share:>10s}")
+
+
 COMMANDS = {
     "fetch": cmd_fetch,
     "build": cmd_build,
@@ -628,6 +726,7 @@ COMMANDS = {
     "env": cmd_env,
     "label-sample": cmd_label_sample,
     "label-score": cmd_label_score,
+    "validate": cmd_validate,
 }
 
 

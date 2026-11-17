@@ -16,6 +16,7 @@ Everything runs on a CPU. No GPU, no containers, no network traffic is generated
 - **Six learners on the same features.** Logistic regression, naive Bayes, linear SVM, random forest, LightGBM, and a one-hidden-layer MLP.
 - **Character-level model (optional).** A small byte-level CNN in PyTorch goes through the same transfer cells, container rewrites, and thresholds, to check whether a model that reads characters instead of word tokens falls into the same trap.
 - **Shape-only interventions.** The same test inputs are re-sent as bare values, as `key=value`, and as JSON, on every seed. A decision that changes can only be caused by the container.
+- **Confirmed evasions.** Rewritten attacks are sent to a small in-process reference application (vulnerable SQLite queries, an unescaped HTML template, a file path, a parsed shell line) to count which changed decisions still carry a working attack.
 - **Shape-only baseline.** A model that sees nothing but the container (its type and the number of `key=value` pairs) is trained on every source, to show how far the shape alone gets.
 - **Equal-FPR comparison.** AUC and detection at a fixed 1% and 5% false-positive rate, so detectors with different thresholds can be compared fairly.
 - **Integrity audit.** Overlap between sources at string, normalized-string, and value level, to find benchmarks that share benign values. Sources that overlap are grouped, and the main results are repeated with one member of each group at a time and with the group as the unit of the tests.
@@ -66,7 +67,7 @@ shapetrap fetch      # download the 14 public source repositories into data/raw 
 shapetrap env        # are the installed packages the ones in requirements.lock?
 shapetrap anchor     # sanity check: must reproduce a known reference result exactly
 shapetrap all        # build -> audit -> crs -> run -> probe -> explain -> report
-pytest               # 61 tests
+pytest               # 81 tests
 ```
 
 The result is `out/REPORT.md`. A full run takes about two and a half to three hours on a laptop CPU (Intel Core i7-10610U, 16 GB RAM); the `run` step is most of it. Set `intervention_seeds = "first"` in `shapetrap.toml` to cut it back to about two hours.
@@ -102,6 +103,7 @@ The model reads UTF-8 bytes, so it needs no tokenizer. Strings longer than `max_
 | `all` | Every step above except `fetch` | |
 | `anchor` | Sanity check: train on the `sqlixss-detector` corpus, test on HttpParamsDataset, and compare with the known reference numbers (97.03% of benign inputs flagged on raw input). Exits with an error if they are not reproduced exactly | terminal |
 | `env` | Compare the installed packages with `requirements.lock`. Exits with an error on any difference | terminal |
+| `validate` | Send original and rewritten attacks to the reference application; count changed decisions that are confirmed evasions | `validation.csv` |
 | `label-sample` | Draw a random sample of held-out strings for manual labeling (`--n`, default 400) | `out/labels/sample.csv`, `GUIDE.md` |
 | `label-score` | Agreement between two labelers, then every detector scored on the agreed labels | `out/labels/agreement.csv`, `detector_scores.csv` |
 
@@ -139,6 +141,29 @@ A config file can start with `extends = "other.toml"` and override single keys, 
 - **Syntax reference.** There is no ground truth, so the report splits the strings into those the CRS blocks and those it does not, and shows how many of each the model flags.
 
 Log contents are only ever read as text. Nothing in them is executed.
+
+## Checking rewrites against an application
+
+A decision that changes when an attack moves to another container is only an evasion if the rewritten request still attacks something. `shapetrap validate` checks that without a server or any network traffic. A small reference application receives each request the way a web framework does (form bodies through `parse_qsl`, JSON through `json.loads`, anything else as one value) and passes every value to deliberately vulnerable sinks:
+
+| Type | Sink | Counts as working when |
+|---|---|---|
+| `sqli` | SQLite query built by string concatenation, string and numeric context | the value leaves its literal: an unescaped quote, or a numeric value that changes a still-valid query (stacked queries included) |
+| `xss` | HTML template without escaping, element and attribute position | the page gains a tag, an `on*` attribute, or a `javascript:` URL that the escaped page does not have |
+| `traversal` | file path under a fixed root | the normalized path leaves the root or names a system file |
+| `cmdi` | shell command line, parsed with `shlex`, never run | the value adds a shell operator or command substitution |
+
+Untyped attacks count when any sink is hit. The oracles are deliberately simple and identical for the original and the rewritten request, so they measure whether a rewrite keeps an attack working, not whether it works against a particular production system.
+
+```bash
+shapetrap validate --config faithful.toml
+```
+
+For every configuration in `validate_configs` it reports how many rewritten attacks still work, how many detections were lost, and how many of those are confirmed evasions (`validation.csv`).
+
+### Literal and faithful rewrites
+
+`rewrite = "literal"` (the default, and what `out/` was produced with) copies values exactly as stored. For sources that store percent-encoded query strings this produces requests no client would send: `q=%27%20or%201=1` becomes the JSON string `"%27%20or%201=1"`, which no server decodes, so most such rewritten attacks stop working. `rewrite = "faithful"` decodes values the way a form parser does before they go into JSON or a bare value, and encodes `%`, `&` and `+` when a value is put behind a key. `faithful.toml` runs the full grid, the byte CNN, and the validation with faithful rewrites into `out-faithful/`.
 
 ## Labeling honeypot inputs
 
@@ -316,7 +341,7 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 
 - Six learners use the same TF-IDF token features; the optional byte CNN is the only character-level model. Transformers are not covered.
 - The CRS runs outside a web server, on synthetic requests with minimal headers. This approximates a real deployment; it does not equal one.
-- Interventions move the payload between containers without mutating it, and rewritten attacks are not run against an application, so a changed decision is not proof of a working evasion.
+- Interventions move the payload between containers without mutating it. `validate` checks rewritten attacks against a small reference application, not against real applications or frameworks with their own parsing quirks.
 - Removing the container also removes context that can matter, such as an unexpected parameter name.
 - Container parsing knows key-value, JSON, and path with query string. Multipart, XML, and nested containers are not handled.
 - Container canonicalization does not help evenly. Two training sources barely improve with `cstrip` (`paper1x` 53.5% → 48.5%, `csic` 100.0% → 94.6%), and `vmil` costs 7.0 points of detection.
