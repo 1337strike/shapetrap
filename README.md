@@ -14,13 +14,17 @@ Everything runs on a CPU. No GPU, no containers, no network traffic is generated
 
 - **Cross-dataset transfer matrix.** Train on one source, test on every source, with family-grouped splits, a leakage purge per cell, and several seeds.
 - **Six learners on the same features.** Logistic regression, naive Bayes, linear SVM, random forest, LightGBM, and a one-hidden-layer MLP.
+- **Neural models (optional).** A small byte-level CNN and a fine-tuned BERT-small go through the same transfer cells, container rewrites, and thresholds, to check whether models that read characters or word pieces fall into the same trap.
 - **Shape-only interventions.** The same test inputs are re-sent as bare values, as `key=value`, and as JSON, on every seed. A decision that changes can only be caused by the container.
+- **Confirmed evasions.** Rewritten attacks are sent to a small in-process reference application (vulnerable SQLite queries, an unescaped HTML template, a file path, a parsed shell line) to count which changed decisions still carry a working attack.
 - **Shape-only baseline.** A model that sees nothing but the container (its type and the number of `key=value` pairs) is trained on every source, to show how far the shape alone gets.
 - **Equal-FPR comparison.** AUC and detection at a fixed 1% and 5% false-positive rate, so detectors with different thresholds can be compared fairly.
 - **Integrity audit.** Overlap between sources at string, normalized-string, and value level, to find benchmarks that share benign values. Sources that overlap are grouped, and the main results are repeated with one member of each group at a time and with the group as the unit of the tests.
 - **Container canonicalization.** Two preprocessing modes that remove the container before classification (`cstrip`, `vmil`).
 - **Real OWASP CRS baseline.** Every string is scored by the Core Rule Set through libmodsecurity at paranoia levels 1 and 2.
+- **Hybrid detectors.** A container-free value classifier combined with the CRS, which parses the request into arguments itself: `and-…` flags only when both agree, `or-…` when either does.
 - **Held-out sources.** Payload lists and SSH/web honeypot logs that are never trained on, with attempted credentials as a non-injection control.
+- **Manual labels for honeypot data.** Draw a stratified sample, have two people label it, get Cohen's kappa, and score every detector on the agreed labels.
 - **Statistics included.** Wilson intervals, exact McNemar tests with Holm correction, exact Wilcoxon signed-rank tests, and source-level bootstrap intervals.
 - **One report.** All tables end up in `out/REPORT.md`, with the raw numbers as CSV next to it.
 
@@ -49,6 +53,12 @@ pip install -e . --no-deps
 shapetrap env        # checks the installed packages against requirements.lock
 ```
 
+The character-level model needs PyTorch. A CPU build is enough and much smaller than the default download:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
 Without `gcc` or libmodsecurity the `crs` step is skipped with a message, and the local signature set is used as the reference instead.
 
 ## Quick start
@@ -58,12 +68,34 @@ shapetrap fetch      # download the 14 public source repositories into data/raw 
 shapetrap env        # are the installed packages the ones in requirements.lock?
 shapetrap anchor     # sanity check: must reproduce a known reference result exactly
 shapetrap all        # build -> audit -> crs -> run -> probe -> explain -> report
-pytest               # 52 tests
+pytest               # 83 tests
 ```
 
 The result is `out/REPORT.md`. A full run takes about two and a half to three hours on a laptop CPU (Intel Core i7-10610U, 16 GB RAM); the `run` step is most of it. Set `intervention_seeds = "first"` in `shapetrap.toml` to cut it back to about two hours.
 
 `fetch` checks out every repository at a pinned commit and, for large repositories, only the folders that are used.
+
+### Neural runs
+
+`charcnn.toml` extends `shapetrap.toml` and trains the byte CNN next to logistic regression on exactly the same splits. It reads the corpus and the CRS verdicts of the main run from `out/`, so run the main pipeline (at least `build`, and `crs` if you want the CRS reference) first:
+
+```bash
+shapetrap run --config charcnn.toml
+shapetrap report --config charcnn.toml
+```
+
+Results go to `out-charcnn/`; `out/` is not touched. On the laptop above, training takes under a minute per model and the full run (3 seeds, `raw`, `canon`, `cstrip`, container rewrites) takes a few hours, mostly scoring the held-out sources. The network settings are in the `[charcnn]` table of `charcnn.toml`.
+
+The model reads UTF-8 bytes, so it needs no tokenizer. Strings longer than `max_len` bytes keep their first and last halves, so a payload at the end of a long query string is still seen. `vmil` is not supported for this model.
+
+`bert.toml` fine-tunes BERT-small (`google/bert_uncased_L-4_H-512_A-8`, 4 layers, about 29M parameters) on every benchmark source with `raw` and `cstrip` input, next to logistic regression, with faithful rewrites. It needs `pip install torch transformers` and downloads the model on first use; any Hugging Face checkpoint or local folder can be set as `model` in the `[bert]` table. On a GPU (a free Kaggle or Colab T4 is enough) the full run takes a few hours; on a laptop CPU, a night or two. `max_train = 10000` trains on a stratified subsample for a quicker run. On a GPU it runs in mixed precision, so results can differ slightly from a CPU run.
+
+To run it on Kaggle or Colab, copy `out/corpus/` and `out/crs/` from your machine (or run `fetch`, `build` and, if libmodsecurity is available, `crs` there), then:
+
+```bash
+pip install -e . torch transformers
+shapetrap run --config bert.toml && shapetrap validate --config bert.toml && shapetrap report --config bert.toml
+```
 
 ## Commands
 
@@ -81,8 +113,13 @@ The result is `out/REPORT.md`. A full run takes about two and a half to three ho
 | `all` | Every step above except `fetch` | |
 | `anchor` | Sanity check: train on the `sqlixss-detector` corpus, test on HttpParamsDataset, and compare with the known reference numbers (97.03% of benign inputs flagged on raw input). Exits with an error if they are not reproduced exactly | terminal |
 | `env` | Compare the installed packages with `requirements.lock`. Exits with an error on any difference | terminal |
+| `validate` | Send original and rewritten attacks to the reference application; count changed decisions that are confirmed evasions | `validation.csv` |
+| `label-sample` | Draw a random sample of held-out strings for manual labeling (`--n`, default 400) | `out/labels/sample.csv`, `GUIDE.md` |
+| `label-score` | Agreement between two labelers, then every detector scored on the agreed labels | `out/labels/agreement.csv`, `detector_scores.csv` |
 
 Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
+
+A config file can start with `extends = "other.toml"` and override single keys, and `base_out = "out"` makes a run read its corpus and CRS verdicts from another output folder.
 
 ## How it works
 
@@ -102,9 +139,10 @@ Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
    Example, `id=5&q=%27%20OR%201=1`: `raw` keeps it as is; `canon` gives `id=5&q=' or 1=1`; `cstrip` gives `5 ' or 1=1`; `vmil` scores `5` and `' or 1=1` separately.
 7. **Shape augmentation.** Each learned detector is also trained in a `+aug` variant that sees every training string in the other containers with the same label.
 8. **CRS baseline.** Each string is placed in an HTTP request that matches its container (key-value as query string, path as request target, JSON as body, anything else as the value of one parameter) and evaluated by libmodsecurity with the CRS rules. Nothing is sent over a network; the request only exists as arguments to the library.
-9. **Shape-only baseline.** `shape-lr` is a logistic regression on six numbers per input: one indicator per container type and the number of `key=value` pairs (capped at 8).
-10. **Uncertainty.** Wilson intervals per cell, 10,000 bootstrap resamples over training sources for cross-dataset means, and exact Wilcoxon signed-rank tests for remedy comparisons, both with the training source and with the provenance group as the unit.
-11. **Equal FPR.** For every scoring detector, each cell also reports AUC and the share of attacks flagged when the threshold is set on that cell's benign inputs so that 1% or 5% of them are flagged. The threshold uses the test labels, so these are best-case operating points.
+9. **Hybrids.** For every configuration in `hybrid_configs`, two more are scored from the same predictions: `and-<config>` (flagged by the configuration and by CRS paranoia level 1) and `or-<config>` (flagged by either). Their scores keep the learned ranking within each CRS verdict, so AUC and the equal-FPR detection still apply. CRS verdicts exist only for corpus strings, so hybrids have no container-rewrite results.
+10. **Shape-only baseline.** `shape-lr` is a logistic regression on six numbers per input: one indicator per container type and the number of `key=value` pairs (capped at 8).
+11. **Uncertainty.** Wilson intervals per cell, 10,000 bootstrap resamples over training sources for cross-dataset means, and exact Wilcoxon signed-rank tests for remedy comparisons, both with the training source and with the provenance group as the unit.
+12. **Equal FPR.** For every scoring detector, each cell also reports AUC and the share of attacks flagged when the threshold is set on that cell's benign inputs so that 1% or 5% of them are flagged. The threshold uses the test labels, so these are best-case operating points.
 
 ### Reading honeypot sources
 
@@ -114,6 +152,47 @@ Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
 - **Syntax reference.** There is no ground truth, so the report splits the strings into those the CRS blocks and those it does not, and shows how many of each the model flags.
 
 Log contents are only ever read as text. Nothing in them is executed.
+
+## Checking rewrites against an application
+
+A decision that changes when an attack moves to another container is only an evasion if the rewritten request still attacks something. `shapetrap validate` checks that without a server or any network traffic. A small reference application receives each request the way a web framework does (form bodies through `parse_qsl`, JSON through `json.loads`, anything else as one value) and passes every value to deliberately vulnerable sinks:
+
+| Type | Sink | Counts as working when |
+|---|---|---|
+| `sqli` | SQLite query built by string concatenation, string and numeric context | the value leaves its literal: an unescaped quote, or a numeric value that changes a still-valid query (stacked queries included) |
+| `xss` | HTML template without escaping, element and attribute position | the page gains a tag, an `on*` attribute, or a `javascript:` URL that the escaped page does not have |
+| `traversal` | file path under a fixed root | the normalized path leaves the root or names a system file |
+| `cmdi` | shell command line, parsed with `shlex`, never run | the value adds a shell operator or command substitution |
+
+Untyped attacks count when any sink is hit. The oracles are deliberately simple and identical for the original and the rewritten request, so they measure whether a rewrite keeps an attack working, not whether it works against a particular production system.
+
+```bash
+shapetrap validate --config faithful.toml
+```
+
+For every configuration in `validate_configs` it reports how many rewritten attacks still work, how many detections were lost, and how many of those are confirmed evasions (`validation.csv`).
+
+### Literal and faithful rewrites
+
+`rewrite = "literal"` (the default, and what `out/` was produced with) copies values exactly as stored. For sources that store percent-encoded query strings this produces requests no client would send: `q=%27%20or%201=1` becomes the JSON string `"%27%20or%201=1"`, which no server decodes, so most such rewritten attacks stop working. `rewrite = "faithful"` decodes values the way a form parser does before they go into JSON or a bare value, and encodes `%`, `&` and `+` when a value is put behind a key. `faithful.toml` runs the full grid, the byte CNN, and the validation with faithful rewrites into `out-faithful/`.
+
+## Labeling honeypot inputs
+
+Honeypot and server-log sources have no confirmed injection labels, so by default the tool only reports how often a detector flags them. To measure real detection on them:
+
+```bash
+shapetrap label-sample --n 400
+```
+
+This writes `out/labels/sample.csv` (and `sample_blind.csv`, the same rows without source and recorded class), plus `GUIDE.md` with the label set: `benign`, `sqli`, `xss`, `cmdi`, `traversal`, `other_malicious`, `unclear`. The sample is drawn from the wild sources only (curated payload lists are attacks by construction), with an equal share for every combination of source and recorded class, so rare web attacks are not swamped by credential lists. The `weight` column turns sample rates back into estimates for a whole source. Set `label_sources = [...]` in the config to choose the sources yourself.
+
+Two people fill `label_a` and `label_b` independently, then:
+
+```bash
+shapetrap label-score
+```
+
+It prints the agreement and Cohen's kappa (overall, per source, and injection versus the rest), writes the rows they disagree on to `disagreements.csv`, and scores every configured detector and the CRS on the rows that have a settled label: share of injection flagged, share of benign flagged, and share of other malicious inputs flagged. Settle disagreements by writing `label_final` and run it again.
 
 ## Data sources
 
@@ -271,9 +350,9 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 
 ## Limitations
 
-- All six learners use the same TF-IDF token features. Character-level models and transformers are not covered.
+- Six learners use the same TF-IDF token features. The optional neural models are one byte CNN and one small transformer (BERT-small); larger or code-specific transformers are not covered.
 - The CRS runs outside a web server, on synthetic requests with minimal headers. This approximates a real deployment; it does not equal one.
-- Interventions move the payload between containers without mutating it, and rewritten attacks are not run against an application, so a changed decision is not proof of a working evasion.
+- Interventions move the payload between containers without mutating it. `validate` checks rewritten attacks against a small reference application, not against real applications or frameworks with their own parsing quirks.
 - Removing the container also removes context that can matter, such as an unexpected parameter name.
 - Container parsing knows key-value, JSON, and path with query string. Multipart, XML, and nested containers are not handled.
 - Container canonicalization does not help evenly. Two training sources barely improve with `cstrip` (`paper1x` 53.5% → 48.5%, `csic` 100.0% → 94.6%), and `vmil` costs 7.0 points of detection.
@@ -286,7 +365,6 @@ The full tables are in [`out/REPORT.md`](out/REPORT.md).
 
 ## Roadmap
 
-- Character-level and small transformer models.
 - Deterministic tie-breaking at the vocabulary cut-off.
 - More containers: multipart, XML, nested.
 - Loaders for CyberLab honeynet, COW160x4, and SR-BH 2020.

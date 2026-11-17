@@ -364,6 +364,10 @@ class ValueSpace:
 def make_detector(kind: str, prep: str, cfg: dict, augment: bool = False, seed: int = 0):
     if kind == "sig":
         return Signature(prep)
+    if kind in ("charcnn", "bert"):
+        from .neural import make_neural
+
+        return make_neural(kind, prep, cfg, seed)
     return TfidfDetector(
         kind,
         prep,
@@ -391,8 +395,15 @@ def detector_grid(cfg: dict):
         for prep in cfg["preprocess"]:
             if prep in cfg.get("nonlinear_preprocess", []) and prep != "vmil":
                 grid.append((kind, prep, False))
+    for kind in cfg.get("neural_detectors", []):
+        for prep in cfg.get("neural_preprocess", ["raw", "canon", "cstrip"]):
+            if prep != "vmil":
+                grid.append((kind, prep, False))
     if "crs" in cfg["detectors"]:
         grid += [("crs", "pl1", False), ("crs", "pl2", False)]
+        for name in cfg.get("hybrid_configs", []):
+            kind, _, prep = name.partition("-")
+            grid += [(f"and-{kind}", prep, False), (f"or-{kind}", prep, False)]
     if cfg.get("shape_baseline", False):
         grid.append(("shape", "lr", False))
     return grid

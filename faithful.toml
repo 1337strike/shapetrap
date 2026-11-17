@@ -1,0 +1,29 @@
+# Full run with faithful container rewrites and the byte CNN.
+#
+# Same sources, splits and learners as shapetrap.toml, plus:
+#   - rewrite = "faithful": rewritten requests are what a client would send
+#     (values decoded before they go into JSON or a bare value, encoded just
+#     enough to survive form parsing when put behind a key)
+#   - the byte CNN (needs PyTorch)
+#   - `shapetrap validate` checks which changed decisions are real evasions
+#   - hybrids: container-free classifiers combined with the CRS
+#
+#   shapetrap run --config faithful.toml
+#   shapetrap validate --config faithful.toml
+#   shapetrap report --config faithful.toml
+#
+# Reads the corpus and CRS verdicts from out/ and writes to out-faithful/.
+
+extends = "shapetrap.toml"
+out_dir = "out-faithful"
+base_out = "out"
+rewrite = "faithful"
+
+neural_detectors = ["charcnn"]
+neural_preprocess = ["raw", "canon", "cstrip"]
+intervention_detectors = ["lr", "rf", "gbm", "mlp", "charcnn"]
+validate_configs = ["lr-raw", "lr-canon", "lr-cstrip", "mlp-raw", "charcnn-raw", "charcnn-cstrip"]
+hybrid_configs = ["lr-cstrip", "lr-vmil", "charcnn-cstrip"]   # each also scored AND / OR with CRS PL1
+
+[charcnn]
+threads = 0                  # 0 = min(4, CPU count)
