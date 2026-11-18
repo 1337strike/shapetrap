@@ -52,6 +52,7 @@ def test_kappa_and_agreement():
     table, disagree = agreement(rows)
     assert table[0]["n"] == 3 and [r["id"] for r in disagree] == ["2", "3"]
     assert [final_label(r) for r in rows] == ["sqli", "", "xss"]
+    assert [final_label(r, single=True) for r in rows] == ["sqli", "benign", "xss"]
 
 
 def test_unknown_label_is_rejected(tmp_path):
@@ -72,3 +73,22 @@ def test_score_flags():
     assert s["n_injection"] == 2 and s["flagged_injection"] == 0.5
     assert s["flagged_benign"] == 0.5
     assert s["flagged_other_malicious"] == 1.0
+
+
+def test_retest_subset_and_intra_rater_kappa(tmp_path):
+    from shapetrap.annotate import agreement, draw_retest, write_retest
+
+    sample = [{"id": f"L{i:04d}", "text": f"t{i}", "label_a": "benign"} for i in range(50)]
+    sub = draw_retest(sample, 20, seed=1)
+    assert len(sub) == 20 and len({r["id"] for r in sub}) == 20
+    assert all(r["label_b"] == "" for r in sub)
+    assert [r["id"] for r in sub] != sorted(r["id"] for r in sub)  # new order
+    write_retest(sub, tmp_path)
+    with pytest.raises(SystemExit):
+        write_retest(sub, tmp_path)
+    rows = [
+        {"id": "1", "source": "s", "label_a": "sqli", "label_b": "sqli", "label_final": ""},
+        {"id": "2", "source": "s", "label_a": "benign", "label_b": "benign", "label_final": ""},
+    ]
+    table, disagree = agreement(rows)
+    assert table[0]["kappa"] == 1.0 and not disagree

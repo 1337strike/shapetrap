@@ -117,6 +117,7 @@ shapetrap run --config bert.toml && shapetrap validate --config bert.toml && sha
 | `env` | Compare the installed packages with `requirements.lock`. Exits with an error on any difference | terminal |
 | `validate` | Send original and rewritten attacks to the reference application; count changed decisions that are confirmed evasions | `validation.csv` |
 | `label-sample` | Draw a random sample of held-out strings for manual labeling (`--n`, default 400) | `out/labels/sample.csv`, `GUIDE.md` |
+| `label-retest` | A shuffled subset of the labeled sample, without labels, for a second pass by the same labeler (`--n`, default 400) | `out/labels/retest.csv` |
 | `label-score` | Agreement between two labelers, then every detector scored on the agreed labels | `out/labels/agreement.csv`, `detector_scores.csv` |
 
 Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
@@ -194,7 +195,7 @@ Two people fill `label_a` and `label_b` independently, then:
 shapetrap label-score
 ```
 
-It prints the agreement and Cohen's kappa (overall, per source, and injection versus the rest), writes the rows they disagree on to `disagreements.csv`, and scores every configured detector and the CRS on the rows that have a settled label: share of injection flagged, share of benign flagged, and share of other malicious inputs flagged. Settle disagreements by writing `label_final` and run it again.
+It prints the agreement and Cohen's kappa (overall, per source, and injection versus the rest), writes the rows they disagree on to `disagreements.csv`, and scores every configured detector and the CRS on the rows that have a settled label: share of injection flagged, share of benign flagged, and share of other malicious inputs flagged. Settle disagreements by writing `label_final` and run it again. With a single labeler, fill `label_a` only and run `shapetrap label-score --single`. To report an intra-rater (test-retest) agreement, run `shapetrap label-retest --n 100` once the first pass is done: it writes `retest.csv`, a random subset in a new order without the first labels. Label it again later, ideally a day after the first pass, without looking at the first labels, and run `label-score --single` again; it then prints Cohen's kappa between the two passes. That measures how consistent the labeler is, not whether the labels are right, so report it as intra-rater agreement.
 
 ## Data sources
 
