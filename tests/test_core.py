@@ -884,3 +884,27 @@ def test_crossed_lmm():
     cells[("s0", "t0")] = float("nan")
     assert crossed_lmm(cells)["n"] == 95
     assert np.isnan(crossed_lmm({("a", "b"): 1.0})["mu"])
+
+
+def test_matched_report_keeps_zero_rates():
+    from shapetrap.report import report_matched
+
+    names = ["a", "b", "c"]
+    summary = []
+    for s in names:
+        for t in names:
+            summary.append({"source": s, "target": t, "config": "crs-pl1", "fpr": 0.0, "det": 0.5})
+            summary.append({"source": s, "target": t, "config": "crs-pl2", "fpr": 0.1, "det": 0.6})
+            summary.append(
+                {
+                    "source": s,
+                    "target": t,
+                    "config": "lr-raw",
+                    "det_at_crs1": 0.0,
+                    "det_at_crs2": 0.7,
+                    "fpr_at_crs1": 0.2,
+                }
+            )
+    md = report_matched(summary, names, ["lr-raw", "crs-pl1"])
+    assert "CRS PL1 on the same cells: detection 50.0%, FPR 0.0%" in md
+    assert "| `lr-raw` | 0.0 | -50.0 | 0/6 |" in md
