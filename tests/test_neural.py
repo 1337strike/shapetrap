@@ -228,3 +228,15 @@ def test_run_with_neural_hybrid_and_faithful_rewrites(tmp_path):
                 assert orc[m] >= max(lr[m], crs[m]) - 1e-12
     assert {r["config"] for r in iv} >= {"lr-raw", "charcnn-raw"}
     assert (tmp_path / "transfer_summary.csv").exists()
+
+    # A second run with the same configuration resumes from the saved
+    # progress and gives the same cells without training anything.
+    msgs: list[str] = []
+    cells2, _, iv2 = run_experiment(cfg, _mini_corpus(), tmp_path, log=msgs.append)
+    assert any("resumed" in m for m in msgs) and not any("trained" in m for m in msgs)
+    key = lambda r: (r["source"], r["target"], r["config"])
+    a = {key(r): r["fpr"] for r in cells}
+    b = {key(r): r["fpr"] for r in cells2}
+    assert a.keys() == b.keys()
+    assert all(a[k] == b[k] or (np.isnan(a[k]) and np.isnan(b[k])) for k in a)
+    assert len(iv2) == len(iv)

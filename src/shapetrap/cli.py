@@ -292,7 +292,7 @@ def cmd_render(args, cfg, base, out):
     md6 = report_held_out(
         summary, interventions, names, held, cfg["headline"], configs, cfg, corpus, reference
     )
-    md8 = report_evasion(interventions, names, held)
+    md8 = report_evasion(interventions, names, held, cfg.get("rewrite", "literal"))
     (out / "section_8_evasion.md").write_text(md8, encoding="utf-8")
     (out / "section_3_transfer.md").write_text(md3, encoding="utf-8")
     (out / "section_4_interventions.md").write_text(md4, encoding="utf-8")
@@ -333,15 +333,29 @@ def cmd_report(args, cfg, base, out):
     import scipy
     import sklearn
 
-    summary = json.loads((out / "corpus" / "summary.json").read_text(encoding="utf-8"))
+    corpus_out = Path(cfg["base_out"]) if cfg.get("base_out") else out
+    summary = json.loads((corpus_out / "corpus" / "summary.json").read_text(encoding="utf-8"))
+    versions = f"scikit-learn {sklearn.__version__} · NumPy {numpy.__version__} · SciPy {scipy.__version__}"
+    if cfg.get("neural_detectors"):
+        try:
+            import torch
+
+            versions += f" · PyTorch {torch.__version__}"
+            if "bert" in cfg["neural_detectors"]:
+                import transformers
+
+                versions += f" · transformers {transformers.__version__}"
+        except ImportError:
+            pass
     md = "# shapetrap audit report\n\n"
     md += (
         f"Generated {time.strftime('%Y-%m-%d %H:%M')} · Python {platform.python_version()} · "
-        f"scikit-learn {sklearn.__version__} · NumPy {numpy.__version__} · SciPy {scipy.__version__}\n\n"
+        f"{versions}\n\n"
     )
     md += (
         f"Seeds {cfg['seeds']} · test share {cfg['test_size']} · cap {cfg['max_per_class']} per class · "
-        f"tokenizer `{cfg['tokenizer']}` · {cfg['max_features']} features\n\n"
+        f"tokenizer `{cfg['tokenizer']}` · {cfg['max_features']} features · "
+        f"rewrites `{cfg.get('rewrite', 'literal')}`\n\n"
     )
     md += "## 0. Sources after cleaning\n\n"
     from .tables import md_table
@@ -383,6 +397,7 @@ def cmd_report(args, cfg, base, out):
         "section_6_held_out.md",
         "section_7_remedies.md",
         "section_8_evasion.md",
+        "section_9_validation.md",
     ):
         p = out / section
         if p.exists():
@@ -698,6 +713,9 @@ def cmd_validate(args, cfg, base, out):
     print(f"  -> {out / 'validation.csv'}")
     print(f"  rewrites: {cfg.get('rewrite', 'literal')}")
     print(f"  {'config':14s} {'rewrite':7s} {'still works':>12s} {'lost':>7s} {'confirmed':>10s}")
+    from .tables import md_table
+
+    table = []
     for name in configs:
         for vn in INTERVENTIONS:
             rs = [r for r in rows_out if r["config"] == name and r["variant"] == vn]
@@ -709,6 +727,20 @@ def cmd_validate(args, cfg, base, out):
             conf = sum(r["confirmed_evasions"] for r in rs)
             share = f"{conf / lost:.1%}" if lost else "-"
             print(f"  {name:14s} {vn:7s} {ok:>12.1%} {lost:>7d} {share:>10s}")
+            table.append([name, vn, n, f"{100 * ok:.1f}", lost, conf, share])
+    md = "## 9. Rewritten attacks against the reference application\n\n"
+    md += (
+        f"Seed {seed}, `{cfg.get('rewrite', 'literal')}` rewrites. Attacks of every benchmark test "
+        "split that work as collected, moved to another container, and sent to the in-process "
+        "reference application (see README). *Lost*: detections lost after the rewrite, summed over "
+        "training and test sources. *Confirmed*: lost detections whose rewritten attack still "
+        "works.\n\n"
+    )
+    md += md_table(
+        ["config", "rewrite", "attacks", "still work (%)", "lost", "confirmed", "confirmed share"],
+        table,
+    )
+    (out / "section_9_validation.md").write_text(md + "\n", encoding="utf-8")
 
 
 COMMANDS = {

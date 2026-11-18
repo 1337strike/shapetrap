@@ -90,6 +90,8 @@ The model reads UTF-8 bytes, so it needs no tokenizer. Strings longer than `max_
 
 `bert.toml` fine-tunes BERT-small (`google/bert_uncased_L-4_H-512_A-8`, 4 layers, about 29M parameters) on every benchmark source with `raw` and `cstrip` input, next to logistic regression, with faithful rewrites. It needs `pip install torch transformers` and downloads the model on first use; any Hugging Face checkpoint or local folder can be set as `model` in the `[bert]` table. On a GPU (a free Kaggle or Colab T4 is enough) the full run takes a few hours; on a laptop CPU, a night or two. `max_train = 10000` trains on a stratified subsample for a quicker run. On a GPU it runs in mixed precision, so results can differ slightly from a CPU run.
 
+Runs save every finished (seed, training source) pair under `progress/` in the output folder. If a run is interrupted, start the same command again and it continues where it stopped; a changed configuration or a changed version of the code starts fresh. `bert-quick.toml` is a ten-minute check (one seed, raw input, 3,000 training strings) to run first.
+
 To run it on Kaggle or Colab, copy `out/corpus/` and `out/crs/` from your machine (or run `fetch`, `build` and, if libmodsecurity is available, `crs` there), then:
 
 ```bash
@@ -268,7 +270,7 @@ Seeds, the cap per class, the tokenizer, the number of features, and the list of
 
 ## Example results
 
-The `out/` folder in this repository holds a complete run of version 0.6.0 with the default configuration (0.6.1 and 0.7.0 produce the same numbers; 0.7.0 only reorganizes and checks the code): seeds 42, 43, 44; 31 detector configurations; Python 3.12.10, scikit-learn 1.9.1, NumPy 2.5.4, SciPy 1.18.1, LightGBM 4.7.0, libmodsecurity 3.0.17, CRS at commit `e587261`.
+The `out/` folder in this repository holds a complete run of version 0.6.0 with the default configuration (0.6.1 and 0.7.0 produce the same numbers; 0.7.0 only reorganizes and checks the code). Version 0.8.0 lets the MLP train until early stopping ends it (up to 300 epochs instead of 30), which changes MLP results for the two sources where the old cut-off was reached; set `mlp_max_iter = 30` to get the earlier behavior: seeds 42, 43, 44; 31 detector configurations; Python 3.12.10, scikit-learn 1.9.1, NumPy 2.5.4, SciPy 1.18.1, LightGBM 4.7.0, libmodsecurity 3.0.17, CRS at commit `e587261`.
 
 **Performance collapses across datasets.** Logistic regression on raw input, mean over the eight benchmark sources:
 
