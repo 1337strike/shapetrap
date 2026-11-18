@@ -68,3 +68,69 @@ def test_faithful_rewrites_keep_the_values(tb):
         interventions({"rewrite": "other"})
     # Faithful rewrites keep an attack working where the literal ones do not.
     assert tb.effective(FAITHFUL_INTERVENTIONS["json"]("q=%27%20or%201%3D1--", 1), "sqli")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "q=%27%20or%201%3D1--&page=2",
+        "' or 1=1--",
+        '{"user": "<script>alert(1)</script>", "n": 3}',
+        "a & b <c> \"d\" 'e'",
+        "line1\r\n--not-a-boundary\r\nline2",
+    ],
+)
+def test_multipart_and_xml_rewrites_keep_the_values(text):
+    from shapetrap.shapes import (
+        EXTRA_INTERVENTIONS,
+        FAITHFUL_INTERVENTIONS,
+        decontain,
+        detect_shape,
+        values_of,
+    )
+    from shapetrap.testbed import receive
+
+    want = sorted(receive(FAITHFUL_INTERVENTIONS["json"](text, 7)))
+    for name, fn in EXTRA_INTERVENTIONS.items():
+        v = fn(text, 7)
+        assert detect_shape(v) == name, (name, v)
+        assert sorted(receive(v)) == want, (name, v)
+        assert sorted(values_of(v)) == sorted(x for x in want if x)
+        assert sorted(decontain(v)) == sorted(x for x in want if x)
+        assert fn(v, 7) == v  # already in that container
+        # and back: the decoded values survive a rewrite into JSON or kv
+        assert sorted(receive(FAITHFUL_INTERVENTIONS["json"](v, 7))) == want
+        assert sorted(receive(FAITHFUL_INTERVENTIONS["kv"](v, 7))) == want
+
+
+def test_strict_container_recognition():
+    from shapetrap.shapes import as_xml_faithful, detect_shape
+
+    xxe = '<?xml version="1.0"?><!DOCTYPE a [<!ENTITY x SYSTEM "file:///etc/passwd">]><a>&x;</a>'
+    assert detect_shape(xxe) == "bare"
+    assert detect_shape('<?xml version="1.0" encoding="UTF-8"?><r><a x="1">v</a></r>') == "bare"
+    assert detect_shape('<?xml version="1.0" encoding="UTF-8"?><r><a>&x;</a></r>') == "bare"
+    assert detect_shape("--b\r\nnot a part\r\n--b--") == "bare"
+    assert detect_shape("-- comment") == "bare"
+    # XML 1.0 cannot carry a NUL: no XML form, the input stays as it is.
+    assert as_xml_faithful("a\x00b", 1) == "a\x00b"
+
+
+def test_crs_requests_for_new_containers():
+    from shapetrap.crs import build_request
+    from shapetrap.shapes import as_multipart_faithful, as_xml_faithful
+
+    mp = as_multipart_faithful("q=1", 1)
+    method, target, ctype, body = build_request(mp)
+    assert (method, target) == ("POST", "/")
+    assert ctype == "multipart/form-data; boundary=" + mp.split("\r\n")[0][2:]
+    assert body == mp + "\r\n"
+    assert build_request(as_xml_faithful("q=1", 1))[2] == "application/xml"
+    # value mode: every string whole, as one parameter
+    assert build_request('{"q": "x"}', "value") == (
+        "GET",
+        "/?q=%7B%22q%22%3A%20%22x%22%7D",
+        "-",
+        "-",
+    )
+    assert build_request("id=5", "value") == ("GET", "/?q=id%3D5", "-", "-")

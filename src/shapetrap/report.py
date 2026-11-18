@@ -16,7 +16,7 @@ from .experiment import (
     TYPED,
 )
 from .shapes import INTERVENTIONS
-from .stats import bootstrap_mean, holm, wilcoxon_exact
+from .stats import bootstrap_mean, crossed_lmm, holm, wilcoxon_exact
 from .tables import md_table, pct
 
 
@@ -192,6 +192,96 @@ def report_fixed_fpr(summary: list[dict], names: list[str], configs: list[str]) 
             "det @1% FPR other",
             "det @5% FPR own",
             "det @5% FPR other",
+        ],
+        rows,
+    )
+    return md
+
+
+def report_matched(summary: list[dict], names: list[str], configs: list[str]) -> str:
+    """Each learned detector at the CRS's own operating point, cell by cell.
+
+    The CRS has one fixed operating point per cell (its false-positive rate and
+    its detection rate there).  A learned score can be thresholded to the same
+    false-positive rate, or to the same detection rate, on the same strings,
+    which removes the threshold as a reason one side looks better."""
+
+    def f(r, key):
+        return float(r.get(key, "nan") or "nan")
+
+    crs = {lvl: _lookup(summary, f"crs-pl{lvl}") for lvl in (1, 2)}
+    if not crs[1]:
+        return ""
+    cells = [(s, t) for s in names for t in names if s != t and (s, t) in crs[1]]
+    rows, notes = [], []
+    for config in configs:
+        if config.startswith(("crs", "sig-", "and-", "or-", "shape-")):
+            continue
+        table = _lookup(summary, config)
+        mine = [(c, table[c]) for c in cells if c in table]
+        if not mine or math.isnan(_mean(f(r, "det_at_crs1") for _, r in mine)):
+            continue
+        line = [f"`{config}`"]
+        for lvl in (1, 2):
+            diffs = {c: f(r, f"det_at_crs{lvl}") - f(crs[lvl][c], "det") for c, r in mine}
+            wins = sum(d > 0 for d in diffs.values())
+            ties = sum(d == 0 for d in diffs.values())
+            per_src = [
+                _mean(d for (a, _), d in diffs.items() if a == src)
+                for src in names
+                if any(a == src for a, _ in diffs)
+            ]
+            _, p, _ = wilcoxon_exact(per_src)
+            mixed = crossed_lmm(diffs)
+            line += [
+                pct(_mean(f(r, f"det_at_crs{lvl}") for _, r in mine)),
+                f"{_mean(diffs.values()) * 100:+.1f}",
+                f"{wins}/{len(diffs)}" + (f" ({ties} tied)" if ties else ""),
+                f"{p:.3f}",
+                f"{mixed['p']:.3f}",
+            ]
+        line.append(pct(_mean(f(r, "fpr_at_crs1") for _, r in mine)))
+        rows.append(line)
+    if not rows:
+        return ""
+    for lvl in (1, 2):
+        notes.append(
+            f"CRS PL{lvl} on the same cells: detection {pct(_mean(f(crs[lvl][c], 'det') for c in cells))}%, "
+            f"FPR {pct(_mean(f(crs[lvl][c], 'fpr') for c in cells))}%"
+        )
+    for lvl in (1, 2):
+        tab = _lookup(summary, f"crsv-pl{lvl}")
+        if tab:
+            notes.append(
+                f"CRS PL{lvl} with each string sent whole as one parameter: detection "
+                f"{pct(_mean(f(tab[c], 'det') for c in cells if c in tab))}%, FPR "
+                f"{pct(_mean(f(tab[c], 'fpr') for c in cells if c in tab))}%"
+            )
+    md = (
+        "\n**At the CRS's operating point** (cross-dataset cells; each learned score is "
+        "thresholded on the cell's own strings so that it flags no more benign strings than "
+        "the CRS does there, and detection is compared with the CRS's on the same attacks. "
+        "`wins` counts cells where the learned detector catches more; p is an exact Wilcoxon "
+        "test over the per-source mean differences, p (mixed) the mixed-effects test over all "
+        "cells described in section 7. The last column is the false-positive rate "
+        "the learned detector needs to catch as many attacks as CRS PL1.) "
+        + "; ".join(notes)
+        + ".\n\n"
+    )
+    md += md_table(
+        [
+            "config",
+            "det @ PL1 FPR",
+            "vs PL1 (pts)",
+            "wins",
+            "p",
+            "p (mixed)",
+            "det @ PL2 FPR",
+            "vs PL2 (pts)",
+            "wins",
+            "p",
+            "p (mixed)",
+            "FPR @ PL1 det",
         ],
         rows,
     )
@@ -379,7 +469,18 @@ def report_transfer(
         c
         for c in configs
         if c.endswith("-raw")
-        or c in ("lr-canon", "lr-cstrip", "lr-vmil", "sig-canon", "crs-pl1", "crs-pl2", "shape-lr")
+        or c
+        in (
+            "lr-canon",
+            "lr-cstrip",
+            "lr-vmil",
+            "sig-canon",
+            "crs-pl1",
+            "crs-pl2",
+            "crsv-pl1",
+            "crsv-pl2",
+            "shape-lr",
+        )
     ]
     rows = []
     for config in picks:
@@ -389,7 +490,7 @@ def report_transfer(
         ci = lambda vals: "{} [{}, {}]".format(*(pct(v) for v in bootstrap_mean(list(vals))))
         # Signatures and the CRS are not trained, so they have no
         # in-distribution/cross-dataset gap to estimate.
-        is_trained = not config.startswith(("sig-", "crs-"))
+        is_trained = not config.startswith(("sig-", "crs-", "crsv-"))
         rows.append(
             [
                 f"`{config}`",
@@ -419,6 +520,7 @@ def report_transfer(
         )
     md += report_robustness(summary, names, configs, groups, list(exclude))
     md += report_fixed_fpr(summary, names, configs)
+    md += report_matched(summary, names, configs)
     return md
 
 
@@ -736,6 +838,77 @@ REMEDIES = (
 )
 
 
+def _mixed_effects(summary, bench, with_control, kinds, have) -> str:
+    """The remedy comparisons again, with every cell as an observation and
+    crossed random effects for the training and the test source."""
+    targets_by_metric = (
+        ("FPR, all other sources with benign strings", "fpr", bench + with_control),
+        ("attacks flagged, other benchmark sources", "det", bench),
+        ("balanced accuracy, other benchmark sources", "bal_acc", bench),
+    )
+    rows, lr_idx, lr_p = [], [], []
+    for title, metric, targets in targets_by_metric:
+        for kind in kinds:
+            base = f"{kind}-canon"
+            if base not in have:
+                continue
+            for suffix, label in REMEDIES:
+                treat = f"{kind}-{suffix}"
+                if treat not in have:
+                    continue
+                b, t = _lookup(summary, base), _lookup(summary, treat)
+                diffs = {
+                    (s_, tg): float(t[(s_, tg)][metric]) - float(b[(s_, tg)][metric])
+                    for s_ in bench
+                    for tg in targets
+                    if tg != s_ and (s_, tg) in b and (s_, tg) in t
+                }
+                fit = crossed_lmm(diffs)
+                if math.isnan(fit["mu"]):
+                    continue
+                rows.append(
+                    [
+                        title,
+                        f"`{treat}`",
+                        fit["n"],
+                        f"{100 * fit['mu']:+.1f} [{100 * fit['lo']:+.1f}, {100 * fit['hi']:+.1f}]",
+                        f"{fit['p']:.3f}",
+                        "",
+                        "{:.0f} / {:.0f} / {:.0f}".format(
+                            100 * fit["share_row"], 100 * fit["share_col"], 100 * fit["share_cell"]
+                        ),
+                    ]
+                )
+                if kind == "lr":
+                    lr_idx.append(len(rows) - 1)
+                    lr_p.append(fit["p"])
+    if not rows:
+        return ""
+    for i, adj in zip(lr_idx, holm(lr_p)):
+        rows[i][5] = f"{adj:.3f}"
+    md = (
+        "\n**Mixed-effects check** (every cross-dataset cell is an observation: difference = "
+        "remedy minus canon, modeled as a mean plus a random effect of the training source, a "
+        "random effect of the test source and cell noise, fitted by REML; t test with "
+        "min(training, test sources) - 1 degrees of freedom. The last column splits the "
+        "variance of the differences into training source / test source / cell, in %. The LR "
+        "rows are Holm-adjusted together.)\n\n"
+    )
+    md += md_table(
+        [
+            "metric",
+            "configuration",
+            "cells",
+            "difference, points [95% CI]",
+            "p",
+            "p (Holm, LR)",
+            "variance: train / test / cell",
+        ],
+        rows,
+    )
+    return md
+
+
 def report_remedies(
     summary: list[dict],
     cells: list[dict],
@@ -916,6 +1089,8 @@ def report_remedies(
             f"\nWith {len(bench_groups)} units the smallest attainable two-sided p is "
             f"{2 / 2 ** len(bench_groups):.3f}.\n"
         )
+
+    md += _mixed_effects(summary, bench, with_control, kinds, have)
 
     # Robustness of the headline comparison across seeds and cells.
     if "lr-canon" in have and "lr-cstrip" in have:
