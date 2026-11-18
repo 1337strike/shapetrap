@@ -292,7 +292,7 @@ def cmd_render(args, cfg, base, out):
     md6 = report_held_out(
         summary, interventions, names, held, cfg["headline"], configs, cfg, corpus, reference
     )
-    md8 = report_evasion(interventions, names, held)
+    md8 = report_evasion(interventions, names, held, cfg.get("rewrite", "literal"))
     (out / "section_8_evasion.md").write_text(md8, encoding="utf-8")
     (out / "section_3_transfer.md").write_text(md3, encoding="utf-8")
     (out / "section_4_interventions.md").write_text(md4, encoding="utf-8")
