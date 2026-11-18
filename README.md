@@ -1,6 +1,6 @@
 # shapetrap
 
-[![CI](https://github.com/1337strike/shapetrap/actions/workflows/ci.yml/badge.svg)](https://github.com/1337strike/shapetrap/actions/workflows/ci.yml)
+[![CI](https://github.com/1337strike/shapetrap/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/1337strike/shapetrap/actions/workflows/ci.yml?query=branch%3Amain)
 
 A command-line toolkit that audits lightweight web-injection detectors across datasets. It answers one question: **does a detector learn the attack, or the shape of the input?**
 
