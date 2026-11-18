@@ -208,11 +208,11 @@ def crossed_lmm(cells: dict[tuple[str, str], float]) -> dict:
         r = y - beta
         return 0.5 * (2 * np.log(np.diag(c)).sum() + math.log(xvx) + float(r @ vi_r))
 
-    best = None
-    for start in ([-1.0, -1.0, -1.0], [-4.0, 0.0, -1.0], [0.0, -4.0, -1.0], [-4.0, -4.0, 0.0]):
-        res = optimize.minimize(neg_reml, np.array(start), method="L-BFGS-B", bounds=[(-20, 5)] * 3)
-        if best is None or res.fun < best.fun:
-            best = res
+    fits = [
+        optimize.minimize(neg_reml, np.array(start), method="L-BFGS-B", bounds=[(-20, 5)] * 3)
+        for start in ([-1.0, -1.0, -1.0], [-4.0, 0.0, -1.0], [0.0, -4.0, -1.0], [-4.0, -4.0, 0.0])
+    ]
+    best = min(fits, key=lambda res: res.fun)
     va, vb, ve = np.exp(best.x)
     _, xvx, beta, _ = parts(best.x)
     se = math.sqrt(1.0 / xvx)
