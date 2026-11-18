@@ -8,7 +8,7 @@ The *shape* of an input is the container it arrives in, regardless of what it ca
 
 shapetrap trains TF-IDF detectors on one public dataset, tests them on all the others and on honeypot logs, changes only the container of the test inputs to see which decisions flip, and compares everything with the real OWASP Core Rule Set.
 
-Everything runs on a CPU. No GPU, no containers, no network traffic is generated.
+Everything runs on a laptop CPU except the optional BERT model, which is practical only on a GPU. Apart from `shapetrap fetch`, which downloads the public datasets, nothing goes over a network: no request is sent to any server, and no Docker is needed.
 
 ## Features
 
@@ -159,7 +159,7 @@ Log contents are only ever read as text. Nothing in them is executed.
 
 ## Checking rewrites against an application
 
-A decision that changes when an attack moves to another container is only an evasion if the rewritten request still attacks something. `shapetrap validate` checks that without a server or any network traffic. A small reference application receives each request the way a web framework does (form bodies through `parse_qsl`, JSON through `json.loads`, anything else as one value) and passes every value to deliberately vulnerable sinks:
+A decision that changes when an attack moves to another container is only an evasion if the rewritten request still attacks something. `shapetrap validate` checks that without a server or any network traffic. A small reference application receives each request the way a web framework does (form bodies through `parse_qsl`, JSON through `json.loads`, multipart and XML bodies field by field, anything else as one value) and passes every value to deliberately vulnerable sinks:
 
 | Type | Sink | Counts as working when |
 |---|---|---|
