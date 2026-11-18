@@ -176,6 +176,8 @@ def _mini_corpus():
             "shape": detect_shape(text),
             "crs1": crs1,
             "crs2": crs1,
+            "crs1v": crs1 and not text.startswith("q="),
+            "crs2v": crs1,
         }
 
     a = [row(" ".join(rng.choice(words, 2)) + str(i), "benign", i % 17 == 0) for i in range(120)]
@@ -215,7 +217,9 @@ def test_run_with_neural_hybrid_and_faithful_rewrites(tmp_path):
     cells, _, iv = run_experiment(cfg, _mini_corpus(), tmp_path, log=lambda *_: None)
     configs = {c["config"] for c in cells}
     assert {"lr-raw", "lr-cstrip", "charcnn-raw", "charcnn-cstrip", "crs-pl1"} <= configs
-    assert {"and-lr-cstrip", "or-lr-cstrip"} <= configs
+    assert {"and-lr-cstrip", "or-lr-cstrip", "crsv-pl1", "crsv-pl2"} <= configs
+    cross = [c for c in cells if c["config"] == "lr-cstrip" and c["source"] != c["target"]]
+    assert all(0 <= c["det_at_crs1"] <= 1 and 0 <= c["fpr_at_crs1"] <= 1 for c in cross)
     by = {(c["source"], c["target"], c["config"]): c for c in cells}
     for (src, tgt, name), c in by.items():
         if name != "and-lr-cstrip":

@@ -643,7 +643,28 @@ def test_grid_with_nonlinear_and_crs():
         "rf-cstrip",
         "crs-pl1",
         "crs-pl2",
+        "crsv-pl1",
+        "crsv-pl2",
     ]
+
+
+def test_matched_operating_point():
+    import numpy as np
+
+    from shapetrap.experiment import _matched
+
+    score = np.array([0.9, 0.8, 0.3, 0.7, 0.2, 0.1])
+    is_attack = np.array([True, True, True, False, False, False])
+    crs = {lvl: np.array([True, False, False, False, False, False]) for lvl in (1, 2)}
+    m = _matched(score, is_attack, crs)
+    # CRS flags no benign string: the learned threshold sits at 0.7, so 2/3.
+    assert m["det_at_crs1"] == 2 / 3
+    # CRS catches one attack: the learned score needs 0.9, which flags no benign.
+    assert m["fpr_at_crs1"] == 0.0
+    crs[1] = np.array([True, True, True, True, False, False])
+    m = _matched(score, is_attack, crs)
+    assert m["det_at_crs1"] == 1.0  # one benign allowed -> threshold 0.2
+    assert m["fpr_at_crs1"] == 1 / 3  # all three attacks need 0.3 -> 0.7 flagged
 
 
 def test_bootstrap_mean():
@@ -687,6 +708,56 @@ def test_crs_attach_rejects_verdicts_from_another_corpus(tmp_path):
     store(["a=1", "b=2"])
     assert crs.attach(corpus, tmp_path) is True
     assert [r["crs1"] for r in corpus["s"]] == [False, True] and corpus["s"][0]["crs2"] is True
+    assert "crs1v" not in corpus["s"][0]  # files without value mode
+    with open(tmp_path / "crs" / "s.csv", "w", encoding="utf-8") as fh:
+        fh.write("idx,text_sha1,pl1,pl2,rules_pl1,pl1v,pl2v\n")
+        fh.writelines(f"{i},{crs._tag(t)},1,1,,0,{i}\n" for i, t in enumerate(["a=1", "b=2"]))
+    assert crs.attach(corpus, tmp_path) is True
+    assert [(r["crs1v"], r["crs2v"]) for r in corpus["s"]] == [(False, False), (False, True)]
+
+
+def test_sensitivity_report():
+    from shapetrap.cli import report_sensitivity
+
+    rows = [
+        {
+            "config": "lr-raw",
+            "source": "a",
+            "target": "b",
+            "detected": 10,
+            "evaded_any": 4,
+            "csr_attack": 0.5,
+            "csr_benign": 0.1,
+            "fpr_native": 0.2,
+            "fpr_any": 0.3,
+        },
+        {
+            "config": "lr-raw",
+            "source": "a",
+            "target": "a",
+            "detected": 10,
+            "evaded_any": 1,
+            "csr_attack": 0.1,
+            "csr_benign": 0.0,
+            "fpr_native": 0.0,
+            "fpr_any": 0.0,
+        },
+        {
+            "config": "crs-pl1",
+            "source": "-",
+            "target": "a",
+            "detected": 8,
+            "evaded_any": 0,
+            "csr_attack": 0.0,
+            "csr_benign": float("nan"),
+            "fpr_native": 0.05,
+            "fpr_any": 0.05,
+        },
+    ]
+    md = report_sensitivity(rows, ["bare", "kv"])
+    assert "| `lr-raw` | cross | 10 | 4 | 40.0 | 50.0 | 10.0 | 20.0 | 30.0 |" in md
+    assert "| `lr-raw` | own | 10 | 1 | 10.0 |" in md
+    assert "| `crs-pl1` | all | 8 | 0 | 0.0 | 0.0 | - | 5.0 | 5.0 |" in md
 
 
 def test_evasion_report_counts_missed_attacks():
@@ -790,3 +861,26 @@ def test_shape_baseline_is_in_the_grid_and_sees_no_content():
     assert ("shape", "lr", False) in detector_grid(cfg)
     assert shape_features("id=1' or 1=1") == shape_features("id=42")
     assert shape_features("id=1") != shape_features('{"id": 1}')
+
+
+def test_crossed_lmm():
+    import numpy as np
+
+    from shapetrap.stats import crossed_lmm
+
+    rng = np.random.default_rng(3)
+    rows, cols = [f"s{i}" for i in range(8)], [f"t{j}" for j in range(12)]
+    a, b = rng.normal(0, 0.05, 8), rng.normal(0, 0.2, 12)
+    cells = {
+        (s, t): 0.3 + a[i] + b[j] + rng.normal(0, 0.02)
+        for i, s in enumerate(rows)
+        for j, t in enumerate(cols)
+    }
+    fit = crossed_lmm(cells)
+    assert fit["n"] == 96 and fit["df"] == 7
+    assert fit["lo"] < 0.3 < fit["hi"] and fit["p"] < 0.01
+    # most of the spread belongs to the test source here
+    assert fit["share_col"] > fit["share_row"] and fit["share_col"] > fit["share_cell"]
+    cells[("s0", "t0")] = float("nan")
+    assert crossed_lmm(cells)["n"] == 95
+    assert np.isnan(crossed_lmm({("a", "b"): 1.0})["mu"])

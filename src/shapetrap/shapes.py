@@ -15,6 +15,10 @@ import re
 from urllib.parse import unquote_plus
 
 SHAPES = ("empty", "kv", "json", "path", "bare")
+# Two more containers a value can travel in.  They are recognized only in the
+# strict form the rewrites below produce, so strings collected in the wild (an
+# XXE payload that starts with ``<?xml``, say) stay ``bare``.
+EXTRA_SHAPES = ("multipart", "xml")
 
 _KEY = r"[A-Za-z0-9_.\-\[\]%]{1,64}"
 _KV_SEG = re.compile(rf"^{_KEY}=")
@@ -37,10 +41,83 @@ def split_kv(text: str) -> list[tuple[str, str]] | None:
     return pairs
 
 
+_MP_OPEN = re.compile(r"--([0-9A-Za-z'()+_,\-./:=?]{1,70})\r\n")
+_MP_HEAD = re.compile(r'Content-Disposition: form-data; name="([^"\r\n]*)"\r\n\r\n')
+_XML_NAME = r"[A-Za-z_][A-Za-z0-9_.\-]{0,63}"
+_XML_DOC = re.compile(
+    rf'<\?xml version="1\.0" encoding="UTF-8"\?>\n?<({_XML_NAME})>(.*)</\1>', re.DOTALL
+)
+_XML_CHILD = re.compile(rf"\s*<({_XML_NAME})>([^<]*)</\1>|\s*<({_XML_NAME})/>")
+_XML_BAD_AMP = re.compile(r"&(?!(?:amp|lt|gt|quot|apos);)")
+_XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
+
+def split_multipart(text: str) -> list[tuple[str, str]] | None:
+    """Fields of a multipart/form-data body (text fields only), or None."""
+    s = text.strip()
+    m = _MP_OPEN.match(s)
+    if not m:
+        return None
+    delim = "--" + m.group(1)
+    if not s.endswith(delim + "--"):
+        return None
+    chunks = s[: -len(delim) - 2].split(delim)
+    if chunks[0] != "" or len(chunks) < 2:
+        return None
+    pairs = []
+    for c in chunks[1:]:
+        if not c.startswith("\r\n") or not c.endswith("\r\n"):
+            return None
+        head = _MP_HEAD.match(c, 2)
+        if not head:
+            return None
+        pairs.append((head.group(1), c[head.end() : -2]))
+    return pairs
+
+
+def _xml_unescape(v: str) -> str:
+    return (
+        v.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+    )
+
+
+def split_xml(text: str) -> list[tuple[str, str]] | None:
+    """Children of a flat XML document (one root, simple child elements, no
+    attributes, no DOCTYPE), or None.  Parsed with regular expressions, so no
+    entity is ever expanded."""
+    m = _XML_DOC.fullmatch(text.strip())
+    if not m:
+        return None
+    inner, pos, pairs = m.group(2), 0, []
+    while pos < len(inner):
+        if not inner[pos:].strip():
+            break
+        c = _XML_CHILD.match(inner, pos)
+        if not c:
+            return None
+        if c.group(1):
+            raw = c.group(2)
+            if _XML_BAD_AMP.search(raw) or ">" in raw:
+                return None
+            pairs.append((c.group(1), _xml_unescape(raw)))
+        else:
+            pairs.append((c.group(3), ""))
+        pos = c.end()
+    return pairs if pairs else None
+
+
 def detect_shape(text: str) -> str:
     s = text.strip()
     if not s:
         return "empty"
+    if s.startswith("--") and split_multipart(s) is not None:
+        return "multipart"
+    if s.startswith("<?xml") and split_xml(s) is not None:
+        return "xml"
     if s[0] in "{[":
         try:
             json.loads(s)
@@ -59,6 +136,9 @@ def values_of(text: str) -> list[str]:
     string itself."""
     s = text.strip()
     pairs = split_kv(s)
+    if pairs is not None:
+        return [v for _, v in pairs if v]
+    pairs = _extra_pairs(s)
     if pairs is not None:
         return [v for _, v in pairs if v]
     if s[:1] in "{[":
@@ -81,6 +161,14 @@ def values_of(text: str) -> list[str]:
         walk(obj)
         return out
     return [s] if s else []
+
+
+def _extra_pairs(s: str) -> list[tuple[str, str]] | None:
+    if s.startswith("--"):
+        return split_multipart(s)
+    if s.startswith("<?xml"):
+        return split_xml(s)
+    return None
 
 
 _PLAIN_KEY = re.compile(r"^[A-Za-z0-9_.\-\[\]]{1,64}$")
@@ -115,6 +203,15 @@ def decontain(text: str) -> list[str]:
     pairs = split_kv(s)
     if pairs is not None:
         out: list[str] = []
+        for key, value in pairs:
+            if not _PLAIN_KEY.match(key):
+                out.append(key)
+            if value:
+                out.append(value)
+        return out
+    pairs = _extra_pairs(s)
+    if pairs is not None:
+        out = []
         for key, value in pairs:
             if not _PLAIN_KEY.match(key):
                 out.append(key)
@@ -190,6 +287,9 @@ def _decoded_pairs(text: str, seed: int) -> list[tuple[str, str]]:
     pairs = split_kv(s)
     if pairs is not None:
         return [(unquote_plus(k), unquote_plus(v)) for k, v in pairs]
+    pairs = _extra_pairs(s)
+    if pairs is not None:
+        return pairs
     if detect_shape(s) == "json":
         obj = json.loads(s)
         if isinstance(obj, dict):
@@ -212,7 +312,7 @@ def _form_quote(value: str) -> str:
 
 def as_bare_faithful(text: str, seed: int = 0) -> str:
     """The decoded values, without keys or separators."""
-    if detect_shape(text) not in ("kv", "json"):
+    if detect_shape(text) not in ("kv", "json", "multipart", "xml"):
         return text
     return " ".join(v for _, v in _decoded_pairs(text, seed) if v)
 
@@ -221,9 +321,9 @@ def as_kv_faithful(text: str, seed: int = 0) -> str:
     """A non-kv input as one form field, encoded so that parsing returns it."""
     if split_kv(text.strip()) is not None:
         return text
-    if detect_shape(text) == "json":
+    if detect_shape(text) in ("json", "multipart", "xml"):
         pairs = _decoded_pairs(text, seed)
-        return "&".join(f"{k}={_form_quote(v)}" for k, v in pairs)
+        return "&".join(f"{_form_quote(k)}={_form_quote(v)}" for k, v in pairs)
     return f"{_neutral_key(text, seed)}={_form_quote(text)}"
 
 
@@ -240,7 +340,63 @@ def as_json_faithful(text: str, seed: int = 0) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 
+def _boundary(pairs: list[tuple[str, str]], seed: int) -> str:
+    """A boundary that occurs in no field, as a client library would pick."""
+    blob = "\n".join(k + "\x00" + v for k, v in pairs)
+    n = 0
+    while True:
+        h = hashlib.sha256(f"{seed}:{n}:{blob}".encode("utf-8", "replace")).hexdigest()[:16]
+        b = "----shapetrap" + h
+        if b not in blob:
+            return b
+        n += 1
+
+
+def as_multipart_faithful(text: str, seed: int = 0) -> str:
+    """The decoded keys and values as a multipart/form-data body (text fields).
+    Field names keep only characters that are safe inside the quoted name."""
+    if detect_shape(text) == "multipart":
+        return text
+    pairs = [(re.sub(r'["\r\n\\]', "_", k), v) for k, v in _decoded_pairs(text, seed)] or [
+        (_neutral_key(text, seed), "")
+    ]
+    b = _boundary(pairs, seed)
+    parts = "".join(
+        f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n' for k, v in pairs
+    )
+    return parts + f"--{b}--"
+
+
+def _xml_name(key: str, seed: int, text: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9_.\-]", "_", key)[:64]
+    if not name or not re.match(r"[A-Za-z_]", name) or name.lower().startswith("xml"):
+        name = ("_" + name)[:64] if name else _neutral_key(text, seed)
+    return name
+
+
+def as_xml_faithful(text: str, seed: int = 0) -> str:
+    """The decoded keys and values as a flat XML document.  Values are escaped
+    (``&``, ``<``, ``>``) the way an XML library writes them.  A value with a
+    character XML 1.0 cannot carry has no XML form; the input is then left as
+    it is."""
+    if detect_shape(text) == "xml":
+        return text
+    pairs = _decoded_pairs(text, seed) or [(_neutral_key(text, seed), "")]
+    if any(_XML_ILLEGAL.search(v) for _, v in pairs):
+        return text
+    body = "".join(
+        "<{0}>{1}</{0}>".format(
+            _xml_name(k, seed, text),
+            v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
+        )
+        for k, v in pairs
+    )
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n<request>{body}</request>'
+
+
 FAITHFUL_INTERVENTIONS = {"bare": as_bare_faithful, "kv": as_kv_faithful, "json": as_json_faithful}
+# Used by `shapetrap validate` only.
+EXTRA_INTERVENTIONS = {"multipart": as_multipart_faithful, "xml": as_xml_faithful}
 
 
 def interventions(cfg: dict) -> dict:
@@ -258,4 +414,4 @@ def shape_features(text: str) -> list[float]:
     """Content-free description of an input, for the shape-only probe."""
     shape = detect_shape(text)
     pairs = split_kv(text.strip()) or []
-    return [float(shape == s) for s in SHAPES] + [float(min(len(pairs), 8))]
+    return [float(shape == s) for s in SHAPES + EXTRA_SHAPES] + [float(min(len(pairs), 8))]

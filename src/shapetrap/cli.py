@@ -669,15 +669,19 @@ def cmd_label_score(args, cfg, base, out):
 def cmd_validate(args, cfg, base, out):
     """Which changed decisions are real evasions?  Rewritten attacks are sent
     to a small in-process reference application (see testbed.py)."""
+    import random
+
     import numpy as np
 
     from .datasets import held_out_sources, split_all
     from .models import make_detector
-    from .shapes import interventions
-    from .tables import write_csv
+    from .shapes import EXTRA_INTERVENTIONS, interventions
+    from .tables import md_table, write_csv
     from .testbed import Testbed
 
-    INTERVENTIONS = interventions(cfg)
+    INTERVENTIONS = dict(interventions(cfg))
+    if cfg.get("rewrite", "literal") == "faithful" and cfg.get("validate_extra_containers", True):
+        INTERVENTIONS.update(EXTRA_INTERVENTIONS)
 
     corpus = _corpus(cfg, out)
     held = held_out_sources(cfg)
@@ -685,31 +689,65 @@ def cmd_validate(args, cfg, base, out):
     seed = cfg["seeds"][0]
     splits = split_all(cfg, corpus, seed)
     tb = Testbed()
-    configs = cfg.get("validate_configs") or [cfg["headline"]]
+    configs = list(cfg.get("validate_configs") or [cfg["headline"]])
+
+    # The real CRS as a detector under the same rewrites: rewritten strings are
+    # sent through libmodsecurity as requests of their new container.
+    verdicts = None
+    has_crs = all("crs1" in rows[0] for rows in corpus.values() if rows)
+    if has_crs and "crs" in cfg["detectors"] and cfg.get("validate_crs", True):
+        from . import crs
+
+        try:
+            verdicts = crs.Verdicts(cfg, base, Path(cfg.get("base_out") or out))
+            configs += [f"crs-pl{lvl}" for lvl in (1, 2)]
+        except RuntimeError as exc:
+            print(f"  CRS skipped: {exc}")
 
     # Attacks of every benchmark test split, and their rewrites, with the
-    # testbed verdict for each.  Independent of the detector.
-    attacks = {}
+    # testbed verdict for each.  Independent of the detector.  Benign test
+    # strings (a seeded sample) get the same rewrites, for the false-positive
+    # side of container sensitivity.
+    cap = int(cfg.get("validate_benign_max", 2000))
+    attacks, benign = {}, {}
     for tgt in bench:
         rows = [r for r in splits[tgt][1] if r["y"] == "attack"]
         texts = [r["text"] for r in rows]
         types = [r["atype"] for r in rows]
         a = {
             "texts": texts,
-            "native_ok": np.array([tb.effective(t, k) for t, k in zip(texts, types)]),
+            "native_ok": np.array([tb.effective(t, k) for t, k in zip(texts, types)], dtype=bool),
         }
         for vn, fn in INTERVENTIONS.items():
             vt = [fn(t, seed) for t in texts]
             a[vn] = {
                 "texts": vt,
-                "changed": np.array([x != y for x, y in zip(texts, vt)]),
-                "ok": np.array([tb.effective(t, k) for t, k in zip(vt, types)]),
+                "changed": np.array([x != y for x, y in zip(texts, vt)], dtype=bool),
+                "ok": np.array([tb.effective(t, k) for t, k in zip(vt, types)], dtype=bool),
             }
         attacks[tgt] = a
-        print(f"  {tgt}: {len(texts)} attacks, {a['native_ok'].mean():.1%} effective as collected")
+        ben = [r["text"] for r in splits[tgt][1] if r["y"] == "benign"]
+        if len(ben) > cap:
+            ben = random.Random(f"{seed}:{tgt}").sample(ben, cap)
+        b = {"texts": ben}
+        for vn, fn in INTERVENTIONS.items():
+            vt = [fn(t, seed) for t in ben]
+            b[vn] = {
+                "texts": vt,
+                "changed": np.array([x != y for x, y in zip(ben, vt)], dtype=bool),
+            }
+        benign[tgt] = b
+        print(
+            f"  {tgt}: {len(texts)} attacks, {a['native_ok'].mean() if texts else 0:.1%} "
+            f"effective as collected; {len(ben)} benign"
+        )
 
-    rows_out = []
-    for name in configs:
+    def detectors(name):
+        """(training source, flag function) pairs for one configuration."""
+        if name.startswith("crs-pl"):
+            lvl = int(name[-1])
+            yield "-", lambda texts: np.array(verdicts.blocked(texts, lvl), dtype=bool)
+            return
         kind, _, prep = name.partition("-")
         if "+" in prep:
             raise SystemExit(f"validate: augmented configurations are not supported ({name})")
@@ -720,18 +758,28 @@ def cmd_validate(args, cfg, base, out):
             det = make_detector(kind, prep, cfg, seed=seed).fit(
                 [r["text"] for r in train], [r["atype"] for r in train]
             )
+            yield (
+                src,
+                lambda texts, det=det: (
+                    np.asarray(det.predict(texts), dtype=object) != "benign"
+                    if texts
+                    else np.zeros(0, dtype=bool)
+                ),
+            )
+
+    rows_out, sens = [], []
+    for name in configs:
+        for src, flags in detectors(name):
             for tgt in bench:
-                a = attacks[tgt]
-                if not a["texts"]:
-                    continue
-                native = np.asarray(det.predict(a["texts"]), dtype=object) != "benign"
+                a, b = attacks[tgt], benign[tgt]
+                native = flags(a["texts"])
+                vflag = {vn: flags(a[vn]["texts"]) for vn in INTERVENTIONS}
                 for vn in INTERVENTIONS:
                     v = a[vn]
                     m = v["changed"] & a["native_ok"]
                     if not m.any():
                         continue
-                    variant = np.asarray(det.predict(v["texts"]), dtype=object) != "benign"
-                    lost = m & native & ~variant
+                    lost = m & native & ~vflag[vn]
                     rows_out.append(
                         {
                             "config": name,
@@ -741,17 +789,52 @@ def cmd_validate(args, cfg, base, out):
                             "n": int(m.sum()),
                             "still_effective": round(float(v["ok"][m].mean()), 4),
                             "detected_native": round(float(native[m].mean()), 4),
-                            "detected_variant": round(float(variant[m].mean()), 4),
+                            "detected_variant": round(float(vflag[vn][m].mean()), 4),
                             "lost": int(lost.sum()),
                             "confirmed_evasions": int((lost & v["ok"]).sum()),
                         }
                     )
+                # Best of all containers: an attacker who may pick any one.
+                n_att = len(a["texts"])
+                evade = np.zeros(n_att, dtype=bool)
+                differs_a = np.zeros(n_att, dtype=bool)
+                for vn in INTERVENTIONS:
+                    usable = a[vn]["changed"] & a[vn]["ok"]
+                    evade |= usable & ~vflag[vn]
+                    differs_a |= usable & (vflag[vn] != native)
+                caught = native & a["native_ok"]
+                bnat = flags(b["texts"])
+                n_ben = len(b["texts"])
+                any_flag = bnat.copy()
+                differs_b = np.zeros(n_ben, dtype=bool)
+                for vn in INTERVENTIONS:
+                    bf = flags(b[vn]["texts"])
+                    ch = b[vn]["changed"]
+                    any_flag |= ch & bf
+                    differs_b |= ch & (bf != bnat)
+                sens.append(
+                    {
+                        "config": name,
+                        "source": src,
+                        "target": tgt,
+                        "attacks_effective": int(a["native_ok"].sum()),
+                        "detected": int(caught.sum()),
+                        "evaded_any": int((caught & evade).sum()),
+                        "csr_attack": round(float(differs_a[a["native_ok"]].mean()), 4)
+                        if a["native_ok"].any()
+                        else float("nan"),
+                        "benign": n_ben,
+                        "fpr_native": round(float(bnat.mean()), 4) if n_ben else float("nan"),
+                        "fpr_any": round(float(any_flag.mean()), 4) if n_ben else float("nan"),
+                        "csr_benign": round(float(differs_b.mean()), 4) if n_ben else float("nan"),
+                    }
+                )
         print(f"  {name}: done")
     write_csv(rows_out, out / "validation.csv")
-    print(f"  -> {out / 'validation.csv'}")
-    print(f"  rewrites: {cfg.get('rewrite', 'literal')}")
-    print(f"  {'config':14s} {'rewrite':7s} {'still works':>12s} {'lost':>7s} {'confirmed':>10s}")
-    from .tables import md_table
+    write_csv(sens, out / "container_sensitivity.csv")
+    print(f"  -> {out / 'validation.csv'}, {out / 'container_sensitivity.csv'}")
+    print(f"  rewrites: {cfg.get('rewrite', 'literal')} ({', '.join(INTERVENTIONS)})")
+    print(f"  {'config':14s} {'rewrite':9s} {'still works':>12s} {'lost':>7s} {'confirmed':>10s}")
 
     table = []
     for name in configs:
@@ -764,7 +847,7 @@ def cmd_validate(args, cfg, base, out):
             lost = sum(r["lost"] for r in rs)
             conf = sum(r["confirmed_evasions"] for r in rs)
             share = f"{conf / lost:.1%}" if lost else "-"
-            print(f"  {name:14s} {vn:7s} {ok:>12.1%} {lost:>7d} {share:>10s}")
+            print(f"  {name:14s} {vn:9s} {ok:>12.1%} {lost:>7d} {share:>10s}")
             table.append([name, vn, n, f"{100 * ok:.1f}", lost, conf, share])
     md = "## 9. Rewritten attacks against the reference application\n\n"
     md += (
@@ -772,13 +855,77 @@ def cmd_validate(args, cfg, base, out):
         "split that work as collected, moved to another container, and sent to the in-process "
         "reference application (see README). *Lost*: detections lost after the rewrite, summed over "
         "training and test sources. *Confirmed*: lost detections whose rewritten attack still "
-        "works.\n\n"
+        "works. `crs-pl1` and `crs-pl2` are the OWASP CRS, given each rewritten string as a "
+        "request of its new container.\n\n"
     )
     md += md_table(
         ["config", "rewrite", "attacks", "still work (%)", "lost", "confirmed", "confirmed share"],
         table,
     )
+    md += report_sensitivity(sens, list(INTERVENTIONS))
     (out / "section_9_validation.md").write_text(md + "\n", encoding="utf-8")
+    print(report_sensitivity(sens, list(INTERVENTIONS)))
+
+
+def report_sensitivity(sens: list[dict], variants: list[str]) -> str:
+    """Best-of-container evasion and container sensitivity, per configuration."""
+    import math
+
+    from .tables import md_table, pct
+
+    def mean(vals):
+        vals = [float(v) for v in vals if not math.isnan(float(v))]
+        return sum(vals) / len(vals) if vals else float("nan")
+
+    rows = []
+    for name in dict.fromkeys(r["config"] for r in sens):
+        for scope, keep in (
+            ("cross", lambda r: r["source"] != r["target"]),
+            ("own", lambda r: r["source"] == r["target"]),
+        ):
+            rs = [r for r in sens if r["config"] == name and keep(r)]
+            if not rs:
+                continue
+            det = sum(int(r["detected"]) for r in rs)
+            ev = sum(int(r["evaded_any"]) for r in rs)
+            rows.append(
+                [
+                    f"`{name}`",
+                    "all" if rs[0]["source"] == "-" else scope,
+                    det,
+                    ev,
+                    pct(ev / det) if det else "-",
+                    pct(mean(r["csr_attack"] for r in rs)),
+                    pct(mean(r["csr_benign"] for r in rs)),
+                    pct(mean(r["fpr_native"] for r in rs)),
+                    pct(mean(r["fpr_any"] for r in rs)),
+                ]
+            )
+    md = (
+        "\n**Container choice as an attack and as a false-positive source** "
+        f"(containers: as collected, {', '.join(variants)}). *Evaded*: attacks that work as "
+        "collected and are detected, but have at least one container in which they still work "
+        "and are not detected (summed over cells). *CSR*: container sensitivity rate, the share of "
+        "strings whose decision changes in at least one container (attacks: working rewrites "
+        "only); mean over cells. *FPR any*: benign strings flagged in at least one container. "
+        "`cross` cells train on one source and test on another, `own` cells on the same "
+        "source.\n\n"
+    )
+    md += md_table(
+        [
+            "config",
+            "cells",
+            "detected",
+            "evaded",
+            "evaded (%)",
+            "CSR attack (%)",
+            "CSR benign (%)",
+            "FPR native (%)",
+            "FPR any (%)",
+        ],
+        rows,
+    )
+    return md
 
 
 COMMANDS = {

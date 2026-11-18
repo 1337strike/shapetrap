@@ -106,7 +106,7 @@ shapetrap run --config bert.toml && shapetrap validate --config bert.toml && sha
 | `fetch` | Download every source at its pinned commit | `data/raw/` |
 | `build` | Clean, de-duplicate, drop label conflicts, cap per class | `out/corpus/` |
 | `audit` | Overlap between sources at string, normalized-string, and value level | `audit_overlap.csv` |
-| `crs` | Score every string with the OWASP CRS through libmodsecurity, paranoia levels 1 and 2 | `out/crs/` |
+| `crs` | Score every string with the OWASP CRS through libmodsecurity, paranoia levels 1 and 2, as a request of its container and as one parameter value | `out/crs/` |
 | `run` | Transfer matrix, shape interventions, held-out evaluation | `transfer_cells.csv`, `transfer_summary.csv`, `interventions.csv` |
 | `render` | Rebuild report sections 3, 4, 6, 7, 8 from the CSV files of the last `run`, without retraining | `section_*.md` |
 | `probe` | Model-free indicators: container per class, accuracy from the container alone, separability | `probe.csv` |
@@ -115,7 +115,7 @@ shapetrap run --config bert.toml && shapetrap validate --config bert.toml && sha
 | `all` | Every step above except `fetch` | |
 | `anchor` | Sanity check: train on the `sqlixss-detector` corpus, test on HttpParamsDataset, and compare with the known reference numbers (97.03% of benign inputs flagged on raw input). Exits with an error if they are not reproduced exactly | terminal |
 | `env` | Compare the installed packages with `requirements.lock`. Exits with an error on any difference | terminal |
-| `validate` | Send original and rewritten attacks to the reference application; count changed decisions that are confirmed evasions | `validation.csv` |
+| `validate` | Send original and rewritten attacks to the reference application; count changed decisions that are confirmed evasions, best-of-container evasion, and container sensitivity of benign and attack decisions, for learned detectors and the CRS | `validation.csv`, `container_sensitivity.csv` |
 | `label-sample` | Draw a random sample of held-out strings for manual labeling (`--n`, default 400) | `out/labels/sample.csv`, `GUIDE.md` |
 | `label-retest` | A shuffled subset of the labeled sample, without labels, for a second pass by the same labeler (`--n`, default 400) | `out/labels/retest.csv` |
 | `label-score` | Agreement between two labelers, then every detector scored on the agreed labels | `out/labels/agreement.csv`, `detector_scores.csv` |
@@ -141,11 +141,12 @@ A config file can start with `extends = "other.toml"` and override single keys, 
 
    Example, `id=5&q=%27%20OR%201=1`: `raw` keeps it as is; `canon` gives `id=5&q=' or 1=1`; `cstrip` gives `5 ' or 1=1`; `vmil` scores `5` and `' or 1=1` separately.
 7. **Shape augmentation.** Each learned detector is also trained in a `+aug` variant that sees every training string in the other containers with the same label.
-8. **CRS baseline.** Each string is placed in an HTTP request that matches its container (key-value as query string, path as request target, JSON as body, anything else as the value of one parameter) and evaluated by libmodsecurity with the CRS rules. Nothing is sent over a network; the request only exists as arguments to the library.
+8. **CRS baseline.** Each string is placed in an HTTP request that matches its container (key-value as query string, path as request target, JSON, multipart and XML as a body with that content type, anything else as the value of one parameter) and evaluated by libmodsecurity with the CRS rules. Nothing is sent over a network; the request only exists as arguments to the library. A second set of verdicts sends every string whole as the value of one parameter, which is what a learned detector sees; these are scored as `crsv-pl1` and `crsv-pl2`. Run `shapetrap crs` again to add them to verdicts stored by an older version.
 9. **Hybrids.** For every configuration in `hybrid_configs`, two more are scored from the same predictions: `and-<config>` (flagged by the configuration and by CRS paranoia level 1) and `or-<config>` (flagged by either). Their scores keep the learned ranking within each CRS verdict, so AUC and the equal-FPR detection still apply. CRS verdicts exist only for corpus strings, so hybrids have no container-rewrite results.
-10. **Shape-only baseline.** `shape-lr` is a logistic regression on six numbers per input: one indicator per container type and the number of `key=value` pairs (capped at 8).
-11. **Uncertainty.** Wilson intervals per cell, 10,000 bootstrap resamples over training sources for cross-dataset means, and exact Wilcoxon signed-rank tests for remedy comparisons, both with the training source and with the provenance group as the unit.
+10. **Shape-only baseline.** `shape-lr` is a logistic regression on eight numbers per input: one indicator per container type (empty, kv, json, path, bare, multipart, xml) and the number of `key=value` pairs (capped at 8).
+11. **Uncertainty.** Wilson intervals per cell, 10,000 bootstrap resamples over training sources for cross-dataset means, and exact Wilcoxon signed-rank tests for remedy comparisons, both with the training source and with the provenance group as the unit. A mixed-effects check repeats the remedy comparisons with every cross-dataset cell as an observation: a mean difference plus a random effect of the training source and one of the test source, fitted by REML, with a t test on min(training, test sources) - 1 degrees of freedom. It also shows how much of the variation comes from the training source and how much from the test source.
 12. **Equal FPR.** For every scoring detector, each cell also reports AUC and the share of attacks flagged when the threshold is set on that cell's benign inputs so that 1% or 5% of them are flagged. The threshold uses the test labels, so these are best-case operating points.
+13. **At the CRS's operating point.** The CRS has one false-positive rate and one detection rate per cell. Each learned score is also thresholded to flag no more benign strings than the CRS does on the same cell (`det_at_crs1`, `det_at_crs2`), and to catch as many attacks as CRS paranoia level 1 (`fpr_at_crs1`). The report counts the cells where the learned detector catches more and tests the difference per source (Wilcoxon) and per cell (mixed effects).
 
 ### Reading honeypot sources
 
@@ -173,7 +174,15 @@ Untyped attacks count when any sink is hit. The oracles are deliberately simple 
 shapetrap validate --config faithful.toml
 ```
 
-For every configuration in `validate_configs` it reports how many rewritten attacks still work, how many detections were lost, and how many of those are confirmed evasions (`validation.csv`).
+For every configuration in `validate_configs`, and for CRS paranoia levels 1 and 2 when CRS verdicts exist, it reports how many rewritten attacks still work, how many detections were lost, and how many of those are confirmed evasions (`validation.csv`). The CRS gets each rewritten string as a request of its new container, evaluated on the spot (`validate_crs = false` turns this off).
+
+It also looks at all containers at once (`container_sensitivity.csv`, last table of section 9):
+
+- **Evaded**: attacks that work as collected and are detected, but have at least one container in which they still work and are not detected. This is what an attacker who may pick the container gets.
+- **CSR attack** and **CSR benign**: container sensitivity rate, the share of strings whose decision changes in at least one container. For attacks only rewrites that still work count. Benign strings are a seeded sample of each test split (`validate_benign_max`, default 2000).
+- **FPR any**: benign strings flagged in at least one container.
+
+With `rewrite = "faithful"` two more containers are used here: `multipart` (a `multipart/form-data` body with one text field per value) and `xml` (a flat XML document, values escaped the way an XML library writes them). The reference application parses them, and so does the CRS (libmodsecurity's multipart and XML body processors). Both are recognized only in the strict form the rewrites produce, so an XXE payload that starts with `<?xml` stays a bare string. `validate_extra_containers = false` keeps the validation to `bare`, `kv` and `json`.
 
 ### Literal and faithful rewrites
 
