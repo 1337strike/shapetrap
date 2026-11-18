@@ -152,3 +152,82 @@ def bootstrap_mean(
     means = vals[idx].mean(axis=1)
     lo, hi = np.quantile(means, [(1 - level) / 2, 1 - (1 - level) / 2])
     return (float(vals.mean()), float(lo), float(hi))
+
+
+def crossed_lmm(cells: dict[tuple[str, str], float]) -> dict:
+    """Mean of cell-level values with crossed random effects for the row
+    (training source) and the column (test source).
+
+    Model: ``y[s, t] = mu + a[s] + b[t] + e[s, t]`` with independent normal
+    ``a``, ``b`` and ``e``, fitted by restricted maximum likelihood.  The
+    test of ``mu = 0`` uses a t distribution with ``min(rows, columns) - 1``
+    degrees of freedom, the conservative containment choice for an intercept
+    that both factors share.  Unlike a test over per-source means, every cell
+    is used, and a source that is hard to test on (or to train on) is a
+    variance component rather than a hidden dependence.
+
+    Returns mu, its standard error, a 95% interval, df, p, and the share of
+    the total variance that belongs to rows, columns and cells.
+    """
+    import numpy as np
+    from scipy import optimize
+    from scipy import stats as sst
+
+    keys = [k for k, v in cells.items() if v is not None and not math.isnan(v)]
+    nan = float("nan")
+    out = {"n": len(keys), "mu": nan, "se": nan, "lo": nan, "hi": nan, "df": 0, "p": nan}
+    out |= {"share_row": nan, "share_col": nan, "share_cell": nan}
+    rows = sorted({s for s, _ in keys})
+    cols = sorted({t for _, t in keys})
+    if len(keys) < 3 or len(rows) < 2 or len(cols) < 2:
+        return out
+    y = np.array([cells[k] for k in keys], dtype=float)
+    scale = float(y.std()) or 1.0
+    y = y / scale
+    za = np.array([[s == r for r in rows] for s, _ in keys], dtype=float)
+    zb = np.array([[t == c for c in cols] for _, t in keys], dtype=float)
+    ka, kb = za @ za.T, zb @ zb.T
+    x = np.ones(len(y))
+    eye = np.eye(len(y))
+
+    def parts(theta):
+        va, vb, ve = np.exp(theta)
+        v = va * ka + vb * kb + ve * eye
+        c = np.linalg.cholesky(v)
+        vi_x = np.linalg.solve(c.T, np.linalg.solve(c, x))
+        vi_y = np.linalg.solve(c.T, np.linalg.solve(c, y))
+        xvx = float(x @ vi_x)
+        beta = float(x @ vi_y) / xvx
+        return c, xvx, beta, vi_y - vi_x * beta
+
+    def neg_reml(theta):
+        try:
+            c, xvx, beta, vi_r = parts(theta)
+        except np.linalg.LinAlgError:
+            return 1e12
+        r = y - beta
+        return 0.5 * (2 * np.log(np.diag(c)).sum() + math.log(xvx) + float(r @ vi_r))
+
+    best = None
+    for start in ([-1.0, -1.0, -1.0], [-4.0, 0.0, -1.0], [0.0, -4.0, -1.0], [-4.0, -4.0, 0.0]):
+        res = optimize.minimize(neg_reml, np.array(start), method="L-BFGS-B", bounds=[(-20, 5)] * 3)
+        if best is None or res.fun < best.fun:
+            best = res
+    va, vb, ve = np.exp(best.x)
+    _, xvx, beta, _ = parts(best.x)
+    se = math.sqrt(1.0 / xvx)
+    df = min(len(rows), len(cols)) - 1
+    tq = float(sst.t.ppf(0.975, df))
+    total = va + vb + ve
+    out.update(
+        mu=beta * scale,
+        se=se * scale,
+        lo=(beta - tq * se) * scale,
+        hi=(beta + tq * se) * scale,
+        df=df,
+        p=float(2 * sst.t.sf(abs(beta / se), df)),
+        share_row=float(va / total),
+        share_col=float(vb / total),
+        share_cell=float(ve / total),
+    )
+    return out
