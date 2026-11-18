@@ -531,6 +531,18 @@ def cmd_label_sample(args, cfg, base, out):
     print(f"  Label sample_blind.csv (or sample.csv) following {out / 'labels' / 'GUIDE.md'}")
 
 
+def cmd_label_retest(args, cfg, base, out):
+    """A shuffled subset of the labeled sample for the same labeler to label again."""
+    from .annotate import draw_retest, read_labels, write_retest
+
+    folder = out / "labels"
+    rows = read_labels(folder / "sample.csv")
+    path = write_retest(draw_retest(rows, args.n, cfg["seed"]), folder)
+    print(f"  {min(args.n, len(rows))} rows in a new order, without labels -> {path}")
+    print("  Label them again later (ideally a day after the first pass) without looking at")
+    print("  the first labels, in the label_b column; then run `label-score --single`.")
+
+
 def cmd_label_score(args, cfg, base, out):
     """Agreement between the two labelers, then every detector on the agreed labels."""
     import numpy as np
@@ -550,20 +562,46 @@ def cmd_label_score(args, cfg, base, out):
             for col in ("label_a", "label_b", "label_final", "note"):
                 if not r.get(col) and extra.get(r["id"], {}).get(col):
                     r[col] = extra[r["id"]][col]
-    table, disagree = agreement(rows)
-    write_csv(table, folder / "agreement.csv")
-    write_csv(disagree, folder / "disagreements.csv")
-    top = table[0]
-    print(
-        f"  labeled by both: {top['n']} of {len(rows)}; agreement {top['agree']}, "
-        f"Cohen's kappa {top['kappa']} (injection vs rest {top['kappa_injection_vs_rest']})"
-    )
-    print(f"  {len(disagree)} disagreements -> {folder / 'disagreements.csv'}")
-    done = [r for r in rows if final_label(r)]
+    single = bool(getattr(args, "single", False))
+    retest = folder / "retest.csv"
+    if single:
+        print(f"  one labeler: {sum(1 for r in rows if r['label_a'])} of {len(rows)} rows labeled")
+        if retest.exists():
+            # Second pass by the same labeler: intra-rater (test-retest) agreement.
+            second = {r["id"]: r.get("label_b", "").strip().lower() for r in read_labels(retest)}
+            pairs = [
+                {**r, "label_b": second[r["id"]]}
+                for r in rows
+                if r["label_a"] and second.get(r["id"])
+            ]
+            table, disagree = agreement(pairs)
+            for t in table:
+                t["kind"] = "intra-rater (same labeler, second pass)"
+            write_csv(table, folder / "agreement.csv")
+            write_csv(disagree, folder / "disagreements.csv")
+            top = table[0]
+            print(
+                f"  second pass: {top['n']} rows; agreement {top['agree']}, intra-rater "
+                f"Cohen's kappa {top['kappa']} (injection vs rest {top['kappa_injection_vs_rest']})"
+            )
+            print(f"  {len(disagree)} rows labeled differently -> {folder / 'disagreements.csv'}")
+        else:
+            print("  no retest.csv yet: run `label-retest` for an intra-rater agreement")
+    else:
+        table, disagree = agreement(rows)
+        write_csv(table, folder / "agreement.csv")
+        write_csv(disagree, folder / "disagreements.csv")
+        top = table[0]
+        print(
+            f"  labeled by both: {top['n']} of {len(rows)}; agreement {top['agree']}, "
+            f"Cohen's kappa {top['kappa']} (injection vs rest {top['kappa_injection_vs_rest']})"
+        )
+        print(f"  {len(disagree)} disagreements -> {folder / 'disagreements.csv'}")
+    done = [r for r in rows if final_label(r, single)]
     if not done:
         print("  no settled labels yet; nothing to score")
         return
-    labels = [final_label(r) for r in done]
+    labels = [final_label(r, single) for r in done]
     texts = [r["text"] for r in done]
     print(
         f"  scoring {len(done)} settled labels: "
@@ -757,6 +795,7 @@ COMMANDS = {
     "anchor": cmd_anchor,
     "env": cmd_env,
     "label-sample": cmd_label_sample,
+    "label-retest": cmd_label_retest,
     "label-score": cmd_label_score,
     "validate": cmd_validate,
 }
@@ -767,7 +806,12 @@ def main(argv=None):
     ap.add_argument("command", choices=list(COMMANDS))
     ap.add_argument("--config", default="shapetrap.toml")
     ap.add_argument("--out", default=None, help="output directory (overrides the config)")
-    ap.add_argument("--n", type=int, default=400, help="label-sample: number of strings")
+    ap.add_argument(
+        "--n", type=int, default=400, help="label-sample / label-retest: number of strings"
+    )
+    ap.add_argument(
+        "--single", action="store_true", help="label-score: one labeler, label_a is the label"
+    )
     args = ap.parse_args(argv)
     cfg, base = load_config(Path(args.config))
     out = Path(args.out) if args.out else base / cfg["out_dir"]

@@ -199,10 +199,13 @@ def agreement(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     return table, disagree
 
 
-def final_label(r: dict) -> str:
-    """The agreed label, or the settled one; empty while still open."""
+def final_label(r: dict, single: bool = False) -> str:
+    """The agreed label, or the settled one; empty while still open.  With
+    one labeler (``single``), ``label_a`` is the label."""
     if r["label_final"]:
         return r["label_final"]
+    if single:
+        return r["label_a"]
     if r["label_a"] and r["label_a"] == r["label_b"]:
         return r["label_a"]
     return ""
@@ -223,3 +226,23 @@ def score_flags(labels: list[str], flags: np.ndarray) -> dict:
         out[f"n_{name}"] = k
         out[f"flagged_{name}"] = round(float(flags[mask].mean()), 4) if k else ""
     return out
+
+
+def draw_retest(sample: list[dict], n: int, seed: int) -> list[dict]:
+    """A random subset of the sample, in a new order and without the first
+    labels, for the same labeler to label again later.  Cohen's kappa between
+    the two passes measures intra-rater (test-retest) agreement."""
+    rng = np.random.default_rng(seed + 1)
+    idx = rng.choice(len(sample), size=min(n, len(sample)), replace=False)
+    return [{"id": sample[i]["id"], "text": sample[i]["text"], "label_b": ""} for i in idx]
+
+
+def write_retest(rows: list[dict], folder: Path) -> Path:
+    path = folder / "retest.csv"
+    if path.exists():
+        raise SystemExit(f"{path} exists already; move it away to draw a new subset")
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, ["id", "text", "label_b"])
+        w.writeheader()
+        w.writerows(rows)
+    return path
