@@ -26,6 +26,7 @@ from scipy.stats import rankdata
 from .datasets import held_out_sources, split_all
 from .models import (
     CONTAINER_FREE,
+    MLP_MAX_ITER,
     SIGNATURE_PREPS,
     Features,
     Signature,
@@ -200,13 +201,19 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
     rewrite_fns = rewrites_for(cfg)
     # Learned configurations to combine with the CRS (paranoia level 1).
     hybrids = set(cfg.get("hybrid_configs", []))
+    mlp_iter = cfg.get("mlp_max_iter", MLP_MAX_ITER)
     cells: list[dict] = []
     interventions: list[dict] = []
     # Finished (seed, training source) pairs are saved as they complete, so an
     # interrupted run picks up where it stopped when started again with the
     # same configuration.  A changed configuration gets a new folder.
+    # The key covers the configuration and the code of the package, so a
+    # changed setting or a new version never reuses results made without it.
+    code = hashlib.sha256()
+    for f in sorted(Path(__file__).parent.glob("*.py")):
+        code.update(f.read_bytes())
     key = json.dumps({k: v for k, v in cfg.items() if k != "out_dir"}, sort_keys=True, default=str)
-    progress = out_dir / "progress" / hashlib.sha256(key.encode()).hexdigest()[:12]
+    progress = out_dir / "progress" / hashlib.sha256(key.encode() + code.digest()).hexdigest()[:12]
     progress.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     # The MLP is stopped early by design, and LightGBM is given unnamed sparse
@@ -399,7 +406,7 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                     )
                     extra = nl_kinds if (not aug and prep in nl_preps) else []
                     for kind in kinds + extra:
-                        clf = make_clf(kind, seed).fit(X_train, y_train)
+                        clf = make_clf(kind, seed, mlp_max_iter=mlp_iter).fit(X_train, y_train)
                         name = config_name(kind, prep, aug)
                         for tgt in names:
                             flag = np.asarray(clf.predict(X[tgt]), dtype=object) != "benign"

@@ -122,7 +122,12 @@ LINEAR = ("lr", "mnb", "svm", "svm_cal")
 NONLINEAR = ("rf", "gbm", "mlp")
 
 
-def make_clf(kind: str, seed: int = 0, paper_settings: bool = False):
+MLP_MAX_ITER = 300  # epochs at most; early stopping usually ends training well before
+
+
+def make_clf(
+    kind: str, seed: int = 0, paper_settings: bool = False, mlp_max_iter: int = MLP_MAX_ITER
+):
     """Classifier for a detector kind.
 
     Logistic regression is run to full convergence (tol=1e-8).  With
@@ -137,7 +142,10 @@ def make_clf(kind: str, seed: int = 0, paper_settings: bool = False):
     lr / mnb / svm are the linear models of the earlier paper.  rf (bagged
     trees), gbm (boosted trees, LightGBM) and mlp (one hidden layer) are
     non-linear learners on the same features, used to check that an effect
-    does not depend on linearity.
+    does not depend on linearity.  The MLP stops when its score on a 10%
+    validation split stops improving; up to version 0.7 it was also cut off
+    after 30 epochs, which ended training early on two sources (ECML and the
+    CRS regression tests).  ``mlp_max_iter = 30`` in the config restores that.
     """
     if kind == "rf":
         from sklearn.ensemble import RandomForestClassifier
@@ -162,7 +170,10 @@ def make_clf(kind: str, seed: int = 0, paper_settings: bool = False):
         from sklearn.neural_network import MLPClassifier
 
         return MLPClassifier(
-            hidden_layer_sizes=(64,), max_iter=30, early_stopping=True, random_state=seed
+            hidden_layer_sizes=(64,),
+            max_iter=mlp_max_iter,
+            early_stopping=True,
+            random_state=seed,
         )
     if kind == "lr":
         if paper_settings:
@@ -233,11 +244,12 @@ class TfidfDetector:
         augment: bool = False,
         seed: int = 0,
         paper_settings: bool = False,
+        mlp_max_iter: int = MLP_MAX_ITER,
     ):
         self.kind, self.prep, self.augment, self.seed = kind, prep, augment, seed
         self.features = Features(prep, tokenizer, max_features, augment, seed)
         self.vec = self.features.vec
-        self.clf = make_clf(kind, seed, paper_settings=paper_settings)
+        self.clf = make_clf(kind, seed, paper_settings=paper_settings, mlp_max_iter=mlp_max_iter)
 
     def fit(self, texts, labels):
         X, labels = self.features.fit_transform(texts, labels)
@@ -375,6 +387,7 @@ def make_detector(kind: str, prep: str, cfg: dict, augment: bool = False, seed: 
         max_features=cfg.get("max_features", 4000),
         augment=augment,
         seed=seed,
+        mlp_max_iter=cfg.get("mlp_max_iter", MLP_MAX_ITER),
     )
 
 
