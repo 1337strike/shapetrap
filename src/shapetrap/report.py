@@ -177,6 +177,12 @@ def report_fixed_fpr(summary: list[dict], names: list[str], configs: list[str]) 
         "each cell's own benign strings so that at most 1% or 5% are flagged; a best-case "
         "operating point that puts every detector at the same FPR; mean over cells)\n\n"
     )
+    if any(r[0].strip("`").startswith(("and-", "or-")) for r in rows):
+        md += (
+            "`and-…` and `or-…` share one ranking (the CRS verdict first, then the learned "
+            "score), so their AUC and fixed-FPR detection are the same; they differ only in "
+            "the default decision shown in the tables above.\n\n"
+        )
     md += md_table(
         [
             "config",
@@ -946,7 +952,9 @@ def report_remedies(
     return md
 
 
-def report_evasion(interventions: list[dict], names: list[str], held: set[str]) -> str:
+def report_evasion(
+    interventions: list[dict], names: list[str], held: set[str], rewrite: str = "literal"
+) -> str:
     """How far an attacker gets by changing only where a payload sits.
 
     The payload itself is untouched: it is moved into a key=value pair or a
@@ -971,11 +979,20 @@ def report_evasion(interventions: list[dict], names: list[str], held: set[str]) 
         "seed(s), rates averaged). `missed` counts attacks that were flagged as collected and "
         "are no longer flagged (mean over seeds). `significant drops` counts train/test cells "
         "where detection falls in every seed (Holm-adjusted exact McNemar p < 0.05 within each "
-        "seed and configuration); `per seed` gives the count in each seed. The rewrite keeps the "
-        "payload's characters; whether the attack would still work against a real application "
-        "is not tested, so a drop measures how sensitive the prediction is to the "
-        "representation.\n"
+        "seed and configuration); `per seed` gives the count in each seed. "
     )
+    if rewrite == "faithful":
+        md += (
+            "Rewrites are `faithful`: values are decoded or encoded the way a client would send "
+            "them. Whether a rewritten attack still works is checked by `shapetrap validate` "
+            "against a small reference application (section 9).\n"
+        )
+    else:
+        md += (
+            "Rewrites are `literal`: values are copied as stored, so a percent-encoded payload "
+            "stays encoded inside JSON. A drop measures how sensitive the prediction is to the "
+            "representation; `shapetrap validate` checks which rewritten attacks still work.\n"
+        )
     for title, same in (("Own source (in-distribution)", True), ("Other benchmark sources", False)):
         rows = []
         for config in sorted({r["config"] for r in sel}):
