@@ -40,7 +40,7 @@ from html import escape
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, unquote
 
-from .shapes import detect_shape
+from .shapes import detect_shape, split_multipart, split_xml
 
 ATTACK_TYPES = ("sqli", "xss", "traversal", "cmdi")
 
@@ -72,6 +72,10 @@ def receive(text: str) -> list[str]:
         return out
     if shape == "kv":
         return [v for _, v in parse_qsl(text.strip(), keep_blank_values=True)]
+    if shape == "multipart":
+        return [v for _, v in split_multipart(text) or []]
+    if shape == "xml":
+        return [v for _, v in split_xml(text) or []]
     if shape == "path":
         path, _, query = text.partition("?")
         vals = [unquote(p) for p in path.split("/") if p]

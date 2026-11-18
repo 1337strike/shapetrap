@@ -414,6 +414,9 @@ def detector_grid(cfg: dict):
                 grid.append((kind, prep, False))
     if "crs" in cfg["detectors"]:
         grid += [("crs", "pl1", False), ("crs", "pl2", False)]
+        # The same rule set with each string sent whole as one parameter;
+        # recorded only when the stored verdicts include value mode.
+        grid += [("crsv", "pl1", False), ("crsv", "pl2", False)]
         for name in cfg.get("hybrid_configs", []):
             kind, _, prep = name.partition("-")
             grid += [(f"and-{kind}", prep, False), (f"or-{kind}", prep, False)]

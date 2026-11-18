@@ -43,6 +43,8 @@ from .tables import write_csv
 
 TYPED = ("sqli", "xss", "cmdi", "traversal")
 FIXED_FPR = ((0.01, "det_at_fpr1"), (0.05, "det_at_fpr5"))
+# Operating points matched to the CRS on the same cell (paranoia level 1 and 2).
+MATCHED = ("det_at_crs1", "fpr_at_crs1", "det_at_crs2", "fpr_at_crs2")
 
 
 def _rate(k: int, n: int) -> float:
@@ -52,6 +54,35 @@ def _rate(k: int, n: int) -> float:
 def _wrate(mask: np.ndarray, base: np.ndarray, weights: np.ndarray) -> float:
     total = float(weights[base].sum())
     return float(weights[mask & base].sum()) / total if total else float("nan")
+
+
+def _matched(score: np.ndarray, is_attack: np.ndarray, crs: dict) -> dict:
+    """Learned detector at the CRS's own operating point on the same cell.
+
+    ``det_at_crsN``: share of attacks flagged when the threshold is set so that
+    no more benign strings are flagged than CRS paranoia level N flags.
+    ``fpr_at_crsN``: share of benign strings flagged when the threshold is set
+    so that at least as many attacks are flagged as the CRS flags.  Both use
+    the test labels of the cell, as the fixed-FPR points do."""
+    out = {}
+    a, b = score[is_attack], score[~is_attack]
+    for lvl in (1, 2):
+        c = crs[lvl]
+        if not len(a) or not len(b):
+            out[f"det_at_crs{lvl}"] = out[f"fpr_at_crs{lvl}"] = float("nan")
+            continue
+        allowed = int((c & ~is_attack).sum())
+        desc_b = np.sort(b)[::-1]
+        thr = desc_b[allowed] if allowed < len(desc_b) else -np.inf
+        out[f"det_at_crs{lvl}"] = float((a > thr).mean())
+        need = int((c & is_attack).sum())
+        if need == 0:
+            out[f"fpr_at_crs{lvl}"] = 0.0
+            continue
+        desc_a = np.sort(a)[::-1]
+        thr = desc_a[need - 1]  # lowest threshold that still reaches `need` attacks
+        out[f"fpr_at_crs{lvl}"] = float((b >= thr).mean())
+    return out
 
 
 def _ranked(score: np.ndarray | None, is_attack: np.ndarray) -> dict:
@@ -89,6 +120,7 @@ def _score(
     ref: np.ndarray | None = None,
     score: np.ndarray | None = None,
     overlap: np.ndarray | None = None,
+    crs: dict | None = None,
 ) -> dict:
     ben, att = ~is_attack, is_attack
     n_b, n_a = int(ben.sum()), int(att.sum())
@@ -131,6 +163,10 @@ def _score(
         out["det_ref_pos"] = _rate(int((flag & pos).sum()), int(pos.sum()))
         out["det_ref_neg"] = _rate(int((flag & neg).sum()), int(neg.sum()))
     out.update(_ranked(score, is_attack))
+    if score is not None and crs is not None:
+        out.update(_matched(score, is_attack, crs))
+    else:
+        out.update({key: float("nan") for key in MATCHED})
     if overlap is not None:
         # Strings whose container-free form also occurs in the training split.
         rest = ~overlap
@@ -186,6 +222,7 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
     # Real CRS verdicts, when `shapetrap crs` has produced them, are both a
     # detector of their own and the reference for explicit injection syntax.
     has_crs = all("crs1" in r for rows in corpus.values() for r in rows[:1])
+    has_crsv = has_crs and all("crs1v" in r for rows in corpus.values() for r in rows[:1])
     augs = [False, True] if cfg.get("shape_augment", False) else [False]
     do_iv = cfg.get("interventions", True)
     iv_kinds = set(cfg.get("intervention_detectors", ["lr"]))
@@ -284,6 +321,10 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                     v["crs"] = {
                         lvl: np.array([r[f"crs{lvl}"] for r in rows], dtype=bool) for lvl in (1, 2)
                     }
+                if has_crsv:
+                    v["crsv"] = {
+                        lvl: np.array([r[f"crs{lvl}v"] for r in rows], dtype=bool) for lvl in (1, 2)
+                    }
                 if iv_here:
                     v["vtexts"] = {
                         name: [fn(t, seed) for t in texts] for name, fn in rewrite_fns.items()
@@ -316,6 +357,7 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                         v["ref"],
                         score,
                         v["overlap"],
+                        v.get("crs"),
                     )
                 )
                 cells.append(row)
@@ -346,6 +388,9 @@ def run_experiment(cfg: dict, corpus: dict[str, list[dict]], out_dir: Path, log=
                     for tgt in names:
                         flag = view[tgt]["crs"][lvl]
                         record(f"crs-pl{lvl}", tgt, flag, np.ones(len(flag), dtype=bool))
+                        if has_crsv:
+                            flag = view[tgt]["crsv"][lvl]
+                            record(f"crsv-pl{lvl}", tgt, flag, np.ones(len(flag), dtype=bool))
 
             want_iv = iv_here and any(k in iv_kinds for k in kinds + nl_kinds + nn_kinds)
             if "vmil" in cfg["preprocess"]:
@@ -525,6 +570,7 @@ def summarize(cells: list[dict]) -> list[dict]:
             "det_novl",
         ]
         + [key for _, key in FIXED_FPR]
+        + list(MATCHED)
         + [f"det_{t}" for t in TYPED]
     )
     for (src, tgt, config), rs in groups.items():
