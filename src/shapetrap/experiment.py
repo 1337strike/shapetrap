@@ -570,6 +570,7 @@ def summarize(cells: list[dict]) -> list[dict]:
             "det_novl",
         ]
         + [key for _, key in FIXED_FPR]
+        + list(MATCHED)
         + [f"det_{t}" for t in TYPED]
     )
     for (src, tgt, config), rs in groups.items():

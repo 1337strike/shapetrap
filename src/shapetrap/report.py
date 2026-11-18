@@ -207,7 +207,8 @@ def report_matched(summary: list[dict], names: list[str], configs: list[str]) ->
     which removes the threshold as a reason one side looks better."""
 
     def f(r, key):
-        return float(r.get(key, "nan") or "nan")
+        v = r.get(key)
+        return float("nan") if v is None or v == "" else float(v)
 
     crs = {lvl: _lookup(summary, f"crs-pl{lvl}") for lvl in (1, 2)}
     if not crs[1]:

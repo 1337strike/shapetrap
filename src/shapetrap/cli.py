@@ -807,11 +807,13 @@ def cmd_validate(args, cfg, base, out):
                 n_ben = len(b["texts"])
                 any_flag = bnat.copy()
                 differs_b = np.zeros(n_ben, dtype=bool)
+                per_variant = {}
                 for vn in INTERVENTIONS:
                     bf = flags(b[vn]["texts"])
                     ch = b[vn]["changed"]
                     any_flag |= ch & bf
                     differs_b |= ch & (bf != bnat)
+                    per_variant[f"fpr_{vn}"] = round(float(bf.mean()), 4) if n_ben else float("nan")
                 sens.append(
                     {
                         "config": name,
@@ -827,6 +829,7 @@ def cmd_validate(args, cfg, base, out):
                         "fpr_native": round(float(bnat.mean()), 4) if n_ben else float("nan"),
                         "fpr_any": round(float(any_flag.mean()), 4) if n_ben else float("nan"),
                         "csr_benign": round(float(differs_b.mean()), 4) if n_ben else float("nan"),
+                        **per_variant,
                     }
                 )
         print(f"  {name}: done")
@@ -925,6 +928,26 @@ def report_sensitivity(sens: list[dict], variants: list[str]) -> str:
         ],
         rows,
     )
+    cols = [v for v in variants if any(f"fpr_{v}" in r for r in sens)]
+    if cols:
+        rows = []
+        for name in dict.fromkeys(r["config"] for r in sens):
+            for scope, keep in (
+                ("cross", lambda r: r["source"] != r["target"]),
+                ("own", lambda r: r["source"] == r["target"]),
+            ):
+                rs = [r for r in sens if r["config"] == name and keep(r)]
+                if rs:
+                    rows.append(
+                        [f"`{name}`", "all" if rs[0]["source"] == "-" else scope]
+                        + [pct(mean(r["fpr_native"] for r in rs))]
+                        + [pct(mean(r.get(f"fpr_{v}", float("nan")) for r in rs)) for v in cols]
+                    )
+        md += (
+            "\n**The same benign strings in each container** (share flagged, %, mean over "
+            "cells; strings already in a container are scored as they are)\n\n"
+        )
+        md += md_table(["config", "cells", "as collected"] + cols, rows)
     return md
 
 
