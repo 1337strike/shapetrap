@@ -930,7 +930,7 @@ def report_sensitivity(sens: list[dict], variants: list[str]) -> str:
     )
     cols = [v for v in variants if any(f"fpr_{v}" in r for r in sens)]
     if cols:
-        rows = []
+        per_container: list[list] = []
         for name in dict.fromkeys(r["config"] for r in sens):
             for scope, keep in (
                 ("cross", lambda r: r["source"] != r["target"]),
@@ -938,7 +938,7 @@ def report_sensitivity(sens: list[dict], variants: list[str]) -> str:
             ):
                 rs = [r for r in sens if r["config"] == name and keep(r)]
                 if rs:
-                    rows.append(
+                    per_container.append(
                         [f"`{name}`", "all" if rs[0]["source"] == "-" else scope]
                         + [pct(mean(r["fpr_native"] for r in rs))]
                         + [pct(mean(r.get(f"fpr_{v}", float("nan")) for r in rs)) for v in cols]
@@ -947,7 +947,7 @@ def report_sensitivity(sens: list[dict], variants: list[str]) -> str:
             "\n**The same benign strings in each container** (share flagged, %, mean over "
             "cells; strings already in a container are scored as they are)\n\n"
         )
-        md += md_table(["config", "cells", "as collected"] + cols, rows)
+        md += md_table(["config", "cells", "as collected"] + cols, per_container)
     return md
 
 
