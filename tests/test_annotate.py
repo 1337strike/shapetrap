@@ -92,3 +92,39 @@ def test_retest_subset_and_intra_rater_kappa(tmp_path):
     ]
     table, disagree = agreement(rows)
     assert table[0]["kappa"] == 1.0 and not disagree
+
+
+def _read(path):
+    import csv
+
+    with open(path, encoding="utf-8", newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+def test_interactive_labeling_saves_and_resumes(tmp_path):
+    import csv
+
+    from shapetrap.annotate import label_interactive, visible
+
+    path = tmp_path / "sample_blind.csv"
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["id", "text", "label_a", "label_b", "label_final", "note"])
+        w.writerow(["L0001", "id=5", "", "", "", ""])
+        w.writerow(["L0002", "' or 1=1--", "", "", "", ""])
+        w.writerow(["L0003", "=cmd|' /c calc'!A0", "", "", "", ""])
+    out = []
+    # 1 -> benign, 2 then back, then sqli by name, note on the third, then quit
+    answers = iter(["1", "2", "b", "sqli", "n", "spreadsheet formula", "x", "q"])
+    left = label_interactive(path, "label_a", ask=lambda _: next(answers), say=out.append)
+    assert left == 1
+    rows = _read(path)
+    assert [r["label_a"] for r in rows] == ["benign", "sqli", ""]
+    assert rows[2]["text"] == "=cmd|' /c calc'!A0"  # the string itself is never touched
+    assert rows[2]["note"] == "spreadsheet formula"
+    # resume: only the unlabeled row is asked
+    answers = iter(["7"])
+    assert label_interactive(path, "label_a", ask=lambda _: next(answers), say=out.append) == 0
+    rows = _read(path)
+    assert rows[2]["label_a"] == "unclear"
+    assert visible("a\nb\x00") == "a\\nb\\x00"
