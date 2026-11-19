@@ -118,6 +118,7 @@ shapetrap run --config bert.toml && shapetrap validate --config bert.toml && sha
 | `validate` | Send original and rewritten attacks to the reference application; count changed decisions that are confirmed evasions, best-of-container evasion, and container sensitivity of benign and attack decisions, for learned detectors and the CRS | `validation.csv`, `container_sensitivity.csv` |
 | `label-sample` | Draw a random sample of held-out strings for manual labeling (`--n`, default 400) | `out/labels/sample.csv`, `GUIDE.md` |
 | `label-retest` | A shuffled subset of the labeled sample, without labels, for a second pass by the same labeler (`--n`, default 400) | `out/labels/retest.csv` |
+| `label` | Label in the terminal, one string at a time (`--round 1`: `sample_blind.csv`, `--round 2`: `retest.csv`) | the same file |
 | `label-score` | Agreement between two labelers, then every detector scored on the agreed labels | `out/labels/agreement.csv`, `detector_scores.csv` |
 
 Options: `--config PATH` (default `shapetrap.toml`) and `--out DIR`.
@@ -198,13 +199,21 @@ shapetrap label-sample --n 400
 
 This writes `out/labels/sample.csv` (and `sample_blind.csv`, the same rows without source and recorded class), plus `GUIDE.md` with the label set: `benign`, `sqli`, `xss`, `cmdi`, `traversal`, `other_malicious`, `unclear`. The sample is drawn from the wild sources only (curated payload lists are attacks by construction), with an equal share for every combination of source and recorded class, so rare web attacks are not swamped by credential lists. The `weight` column turns sample rates back into estimates for a whole source. Set `label_sources = [...]` in the config to choose the sources yourself.
 
+The rows can be labeled in a spreadsheet, or in the terminal:
+
+```bash
+shapetrap label --round 1
+```
+
+It shows one string at a time, with newlines and other control characters written out, and takes a number from 1 to 7 for the label (`b` goes back, `s` skips, `n` adds a note, `q` quits). The file is saved after every answer, and labeled rows are skipped the next time, so the work can be split over several sittings. A spreadsheet can turn strings that start with `=`, `+` or `-` into formulas; the terminal never changes the strings.
+
 Two people fill `label_a` and `label_b` independently, then:
 
 ```bash
 shapetrap label-score
 ```
 
-It prints the agreement and Cohen's kappa (overall, per source, and injection versus the rest), writes the rows they disagree on to `disagreements.csv`, and scores every configured detector and the CRS on the rows that have a settled label: share of injection flagged, share of benign flagged, and share of other malicious inputs flagged. Settle disagreements by writing `label_final` and run it again. With a single labeler, fill `label_a` only and run `shapetrap label-score --single`. To report an intra-rater (test-retest) agreement, run `shapetrap label-retest --n 100` once the first pass is done: it writes `retest.csv`, a random subset in a new order without the first labels. Label it again later, ideally a day after the first pass, without looking at the first labels, and run `label-score --single` again; it then prints Cohen's kappa between the two passes. That measures how consistent the labeler is, not whether the labels are right, so report it as intra-rater agreement.
+It prints the agreement and Cohen's kappa (overall, per source, and injection versus the rest), writes the rows they disagree on to `disagreements.csv`, and scores every configured detector and the CRS on the rows that have a settled label: share of injection flagged, share of benign flagged, and share of other malicious inputs flagged. Settle disagreements by writing `label_final` and run it again. With a single labeler, fill `label_a` only and run `shapetrap label-score --single`. To report an intra-rater (test-retest) agreement, run `shapetrap label-retest --n 100` once the first pass is done: it writes `retest.csv`, a random subset in a new order without the first labels. Label it again later (`shapetrap label --round 2`), ideally a day after the first pass, without looking at the first labels, and run `label-score --single` again; it then prints Cohen's kappa between the two passes. That measures how consistent the labeler is, not whether the labels are right, so report it as intra-rater agreement.
 
 ## Data sources
 

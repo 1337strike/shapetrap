@@ -246,3 +246,101 @@ def write_retest(rows: list[dict], folder: Path) -> Path:
         w.writeheader()
         w.writerows(rows)
     return path
+
+
+_KEYS = {str(i + 1): label for i, label in enumerate(LABELS)}
+_SHOW_MAX = 1500
+
+
+def visible(text: str) -> str:
+    """The string with control characters written out, so that a newline or a
+    tab inside a payload is seen rather than acted on."""
+    out = []
+    for ch in text:
+        if ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ord(ch) < 32 or ord(ch) == 127:
+            out.append(f"\\x{ord(ch):02x}")
+        else:
+            out.append(ch)
+    s = "".join(out)
+    if len(s) > _SHOW_MAX:
+        s = s[:_SHOW_MAX] + f" ... [{len(s) - _SHOW_MAX} more characters]"
+    return s
+
+
+def _save(path: Path, fields: list[str], rows: list[dict]) -> None:
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fields)
+        w.writeheader()
+        w.writerows(rows)
+    tmp.replace(path)
+
+
+def label_interactive(path: Path, column: str, ask=input, say=print) -> int:
+    """Label the rows of a CSV file one at a time in the terminal.
+
+    Rows that already have a label are skipped, and the file is saved after
+    every answer, so the work can be stopped and resumed at any point.
+    Returns the number of rows still without a label."""
+    with open(path, encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        fields = list(reader.fieldnames or [])
+        rows = list(reader)
+    if column not in fields:
+        raise SystemExit(f"{path} has no {column} column")
+    has_note = "note" in fields
+    menu = "  ".join(f"{k} {v}" for k, v in _KEYS.items())
+    extra = "b back  s skip" + ("  n note" if has_note else "") + "  q quit"
+    todo = [i for i, r in enumerate(rows) if not r[column].strip()]
+    done_before = len(rows) - len(todo)
+    history: list[int] = []
+    pos = 0
+    while pos < len(todo):
+        i = todo[pos]
+        r = rows[i]
+        say("")
+        say(f"[{done_before + pos + 1}/{len(rows)}] {r['id']}  ({len(r['text'])} characters)")
+        say("-" * 72)
+        say(visible(r["text"]))
+        say("-" * 72)
+        if has_note and r.get("note"):
+            say(f"note: {r['note']}")
+        say(menu)
+        say(extra)
+        key = ask("> ").strip().lower()
+        if key in _KEYS:
+            r[column] = _KEYS[key]
+            _save(path, fields, rows)
+            history.append(pos)
+            pos += 1
+        elif key in LABELS:
+            r[column] = key
+            _save(path, fields, rows)
+            history.append(pos)
+            pos += 1
+        elif key == "b":
+            if history:
+                pos = history.pop()
+                rows[todo[pos]][column] = ""
+                _save(path, fields, rows)
+            else:
+                say("  nothing to go back to in this session")
+        elif key == "s":
+            pos += 1
+        elif key == "n" and has_note:
+            r["note"] = ask("note: ").strip()
+            _save(path, fields, rows)
+        elif key == "q":
+            break
+        else:
+            say("  type a number from 1 to 7, or b, s, n, q")
+    left = sum(1 for r in rows if not r[column].strip())
+    say("")
+    say(f"  saved {path}; {len(rows) - left} of {len(rows)} labeled, {left} to go")
+    return left
