@@ -543,6 +543,30 @@ def cmd_label_retest(args, cfg, base, out):
     print("  the first labels, in the label_b column; then run `label-score --single`.")
 
 
+def cmd_label(args, cfg, base, out):
+    """Label in the terminal, one string at a time: round 1 fills label_a in
+    sample_blind.csv, round 2 fills label_b in retest.csv."""
+    from .annotate import label_interactive
+
+    folder = out / "labels"
+    path, column = (
+        (folder / "sample_blind.csv", "label_a")
+        if args.round == 1
+        else (folder / "retest.csv", "label_b")
+    )
+    if not path.exists():
+        step = "label-sample" if args.round == 1 else "label-retest"
+        raise SystemExit(f"{path} not found; run `shapetrap {step}` first")
+    try:
+        left = label_interactive(path, column)
+    except (KeyboardInterrupt, EOFError):
+        print("\n  stopped; every answer so far is saved")
+        return
+    if not left:
+        nxt = "label-retest" if args.round == 1 else "label-score --single"
+        print(f"  all done; next: shapetrap {nxt}")
+
+
 def cmd_label_score(args, cfg, base, out):
     """Agreement between the two labelers, then every detector on the agreed labels."""
     import numpy as np
@@ -966,6 +990,7 @@ COMMANDS = {
     "env": cmd_env,
     "label-sample": cmd_label_sample,
     "label-retest": cmd_label_retest,
+    "label": cmd_label,
     "label-score": cmd_label_score,
     "validate": cmd_validate,
 }
@@ -981,6 +1006,13 @@ def main(argv=None):
     )
     ap.add_argument(
         "--single", action="store_true", help="label-score: one labeler, label_a is the label"
+    )
+    ap.add_argument(
+        "--round",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help="label: 1 = first pass (sample_blind.csv), 2 = retest pass (retest.csv)",
     )
     args = ap.parse_args(argv)
     cfg, base = load_config(Path(args.config))
